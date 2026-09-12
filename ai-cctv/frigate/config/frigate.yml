@@ -1,0 +1,66 @@
+mqtt:
+  enabled: true
+  host: mqtt
+  port: 1883
+  topic_prefix: frigate
+  client_id: frigate
+
+detectors:
+  cpu1:
+    type: cpu
+    num_threads: 3
+
+database:
+  path: /config/frigate.db
+
+detect:
+  enabled: true
+  width: 1280
+  height: 720
+  fps: 5
+
+objects:
+  track:
+    - person
+  filters:
+    person:
+      min_area: 5000
+      max_area: 100000
+      min_score: 0.5
+      threshold: 0.7
+
+cameras:
+  front_door:
+    ffmpeg:
+      inputs:
+        - path: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+          roles:
+            - detect
+            - record
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+    objects:
+      track:
+        - person
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: motion
+      events:
+        retain:
+          default: 14
+          mode: active_objects
+    snapshots:
+      enabled: true
+      clean_copy: true
+      timestamp: true
+      bounding_box: true
+      crop: false
+      retain:
+        default: 14
+
+version: 0.13
