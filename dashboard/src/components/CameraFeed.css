@@ -51,19 +51,6 @@
   font-size: 0.85rem;
 }
 
-.activity-label {
-  font-size: 0.75rem;
-  font-weight: bold;
-  padding: 2px 6px;
-  border-radius: 2px;
-  background-color: rgba(0,0,0,0.6);
-  border-left: 2px solid;
-  text-transform: uppercase;
-}
-.activity-label.critical { border-left-color: var(--status-red); color: var(--status-red); }
-.activity-label.warning { border-left-color: var(--status-amber); color: var(--status-amber); }
-.activity-label.info { border-left-color: var(--status-green); color: var(--status-green); }
-
 .overlay-top-right {
   position: absolute;
   top: 16px;
@@ -104,34 +91,3 @@
 }
 .secondary .timestamp { font-size: 0.75rem; }
 
-.overlay-bottom-right {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
-  z-index: 10;
-}
-
-.detection-info {
-  color: #fff;
-  font-size: 0.8rem;
-  text-align: right;
-  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
-}
-.detection-info .confidence {
-  color: var(--status-green);
-  font-weight: bold;
-}
-
-.detection-box {
-  position: absolute;
-  top: 20%;
-  left: 30%;
-  width: 40%;
-  height: 60%;
-  border: 2px solid;
-  z-index: 5;
-  background-color: rgba(255,255,255,0.05);
-}
-.detection-box.critical { border-color: var(--status-red); }
-.detection-box.warning { border-color: var(--status-amber); }
-.detection-box.info { border-color: var(--status-green); }

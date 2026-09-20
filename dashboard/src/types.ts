@@ -26,13 +26,6 @@ export interface SecurityAlert {
   status: 'active' | 'acknowledged' | 'resolved';
 }
 
-export interface Detection {
-  id: string;
-  label: string;
-  confidence: number;
-  box: [number, number, number, number]; // [x, y, width, height] as percentages
-}
-
 export interface SystemStatus {
   online: boolean;
   activeAlerts: number;

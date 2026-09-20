@@ -295,7 +295,7 @@ Person 4 consumes persisted `SecurityEvent` records via Person 1's API. The even
 ## Running Tests
 
 ```bash
-cd ai-cctv/backend
+cd backend
 python -m pytest tests/security/ -v
 ```
 

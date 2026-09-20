@@ -43,11 +43,11 @@ SecurePulse addresses this gap by providing an open, locally deployable intellig
 * 🔐 JWT authentication & scope-based RBAC **(Implemented)**
 * 📹 Camera management & multi-camera mapping **(Implemented)**
 * 🧠 Security engine integration adapter with fallback **(Implemented)**
-* 🚨 Intrusion detection & zone breach evaluation **(In Progress)**
-* 📍 Restricted-zone detection **(In Progress)**
-* 🖥️ Web dashboard (React + Vite) **(In Progress / Scaffolded)**
-* ⏱️ Loitering detection **(Planned)**
-* 📏 Line-crossing detection **(Planned)**
+* 🚨 Intrusion detection & zone breach evaluation **(Implemented)**
+* 📍 Restricted-zone detection **(Implemented)**
+* 🖥️ Web dashboard (React + Vite) **(Implemented)**
+* ⏱️ Loitering detection **(Implemented)**
+* 📏 Line-crossing detection **(Implemented)**
 * 👮 QRT alert/deployment emergency workflow **(Planned)**
 
 ---
@@ -160,8 +160,8 @@ Rapid Response
 ```
 
 **Implementation Status:**
-* **Implemented:** None. (The repository is currently empty).
-* **Planned:** QRT deployment/response functionality, alert routing, and physical responder notification systems are described in the project concept but not yet implemented. SecurePulse does not currently dispatch physical QRT personnel.
+* **Implemented:** Backend APIs, event processing, security rules, authentication, realtime event streaming, and the dashboard data integration.
+* **Planned:** QRT deployment/response functionality, alert routing, and physical responder notification systems. SecurePulse does not currently dispatch physical QRT personnel.
 
 ---
 
@@ -320,7 +320,6 @@ pytest -v
 
 **Planned**
 * 📋 QRT emergency dispatch workflow
-* 📋 Line-crossing & loitering analytics
 * 📋 Multi-camera cross-tracking (v2)
 
 ---
@@ -334,9 +333,9 @@ pytest -v
 * [x] REST API for camera and event querying
 * [x] Real-time WebSocket event broadcast
 * [x] JWT authentication & scope authorization
-* [ ] Zone-based intrusion rules
-* [ ] Loitering & line-crossing detection
-* [ ] React web dashboard
+* [x] Zone-based intrusion rules
+* [x] Loitering & line-crossing detection
+* [x] React web dashboard
 * [ ] QRT alert/deployment emergency workflow
 * [ ] Multi-camera GPU pipeline & cross-re-identification
 
