@@ -1,25 +1,35 @@
-# Environment
+# ── Environment ──
 .env
 .env.local
+.env.*.local
 
-# Python
+# ── Python ──
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.egg-info/
 dist/
 build/
 
-# Testing
+# ── Testing ──
 .pytest_cache/
 htmlcov/
 .coverage
 
-# IDE
+# ── IDE ──
 .vscode/
 .idea/
 
-# OS
+# ── OS ──
 Thumbs.db
 .DS_Store
+
+# ── Node (dashboard) ──
+node_modules/
+
+# ── Frigate Media & Storage ──
+frigate/media/*
+!frigate/media/.gitkeep
+

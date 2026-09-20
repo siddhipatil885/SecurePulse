@@ -12,7 +12,7 @@
 
 The system focuses on detecting intrusions, restricted-zone breaches, and loitering, enabling real-time alert generation and emergency response support. By emphasizing edge/GPU-based processing, SecurePulse offers a cost-effective deployment model that operates locally, significantly reducing the reliance on cloud infrastructure.
 
-*(Note: SecurePulse is currently in the early prototype phase. The features described reflect the intended architecture and are not yet production-ready.)*
+*(Note: SecurePulse is currently in active development. Edge perception infrastructure and the FastAPI backend event engine are implemented.)*
 
 ---
 
@@ -32,24 +32,23 @@ SecurePulse addresses this gap by providing an open, locally deployable intellig
 
 ## Key Features
 
-*The features below represent the planned capabilities for SecurePulse. As the repository is currently empty, these are marked as planned.*
-
-* 🎥 Real-time CCTV analysis **(Planned)**
-* 🤖 AI object detection **(Planned)**
-* 🚶 Person detection **(Planned)**
-* 🚗 Vehicle detection **(Planned)**
-* 🚨 Intrusion detection **(Planned)**
-* 📍 Restricted-zone detection **(Planned)**
-* 📏 Line-crossing detection **(Planned)**
+* 🎥 Real-time CCTV analysis (RTSP ingestion via Frigate) **(Implemented)**
+* 🤖 Edge AI object detection (Person & Vehicle) **(Implemented)**
+* 🚶 Person detection **(Implemented)**
+* 🚗 Vehicle detection **(Implemented)**
+* ⚡ Motion-gated inference **(Implemented)**
+* 🔔 MQTT event ingestion & normalization **(Implemented)**
+* 💾 Event evidence metadata & persistence (PostgreSQL / asyncpg) **(Implemented)**
+* 📡 Real-time WebSocket event streaming **(Implemented)**
+* 🔐 JWT authentication & scope-based RBAC **(Implemented)**
+* 📹 Camera management & multi-camera mapping **(Implemented)**
+* 🧠 Security engine integration adapter with fallback **(Implemented)**
+* 🚨 Intrusion detection & zone breach evaluation **(In Progress)**
+* 📍 Restricted-zone detection **(In Progress)**
+* 🖥️ Web dashboard (React + Vite) **(In Progress / Scaffolded)**
 * ⏱️ Loitering detection **(Planned)**
-* 🎯 Multi-object tracking using ByteTrack **(Planned)**
-* ⚡ Motion-gated inference **(Planned)**
-* 🔔 MQTT/Webhook alerting **(Planned)**
-* 💾 Event-based video recording **(Planned)**
-* 🖥️ Web dashboard **(Planned)**
-* 📹 Multi-camera support **(Planned)**
-* 🖥️ Edge/GPU deployment **(Planned)**
-* 👮 QRT alert/deployment workflow **(Planned)**
+* 📏 Line-crossing detection **(Planned)**
+* 👮 QRT alert/deployment emergency workflow **(Planned)**
 
 ---
 
@@ -180,54 +179,70 @@ SecurePulse is designed to scale from small embedded devices to large centralize
 
 ## Technology Stack
 
-The following technologies are planned for the implementation of SecurePulse:
+### Edge Perception & Video Ingestion
+* **Frigate NVR** (v0.13.2) — Hardware-accelerated object detection (OpenVINO / Coral TPU / CPU)
+* **MediaMTX** — RTSP/WebRTC stream simulator & relay
+* **RTSP / ONVIF** — IP camera protocol support
 
-### AI / ML
-* YOLOv8
-* ByteTrack
-* TensorRT
-* TFLite INT8
+### Messaging & Real-Time
+* **Eclipse Mosquitto** — MQTT broker for edge event telemetry
+* **WebSockets** — Process-local real-time event streaming (`/api/v1/events/stream`)
 
-### Video Processing
-* NVIDIA DeepStream
-* Frigate NVR
-* RTSP
-* ONVIF
+### Backend Application
+* **FastAPI** — High-performance asynchronous REST & WebSocket framework
+* **SQLAlchemy 2.x & asyncpg** — Asynchronous PostgreSQL ORM & driver
+* **Alembic** — Database schema migrations
+* **Pydantic v2** — Data validation, settings management, and domain modeling
+* **Pytest & HTTPX** — Automated unit and integration testing
 
-### Frontend
-* React
-* Vite
-* Tailwind CSS
+### Frontend (Dashboard)
+* **React & Vite** — Next-generation frontend web dashboard (scaffolded in `dashboard/`)
+* **Tailwind CSS** — Utility-first styling
 
-### Communication
-* MQTT
-* Webhooks
-
-### Backend / Configuration
-* Firebase
-
-### Storage
-* Local Disk / NAS
-* Event-based video clips
+### Storage & Persistence
+* **PostgreSQL / Cloud SQL** — Camera registry, security event records, evidence metadata
+* **Local Disk / NAS** — Event-based video clips and snapshot storage via Frigate mount
 
 ---
 
 ## Project Architecture / Folder Structure
 
-Currently, the repository is empty pending the initial code commit.
-
 ```text
 SecurePulse/
-└── README.md
-```
-
-**Suggested Future Structure:**
-```text
-SecurePulse/
-├── backend/          # Inference pipeline and event engine
-├── frontend/         # React/Vite dashboard
-├── config/           # System configuration files
-├── docker/           # Deployment containers
+├── backend/                    # FastAPI backend & event processing engine
+│   ├── alembic/                # Database migrations (PostgreSQL)
+│   ├── app/
+│   │   ├── api/                # REST & WebSocket endpoints
+│   │   ├── core/               # App configuration, auth, logging
+│   │   ├── database/           # Async SQLAlchemy engine & session factory
+│   │   ├── domain/             # Pydantic schemas & business logic models
+│   │   ├── integrations/       # Frigate NVR & Security Engine HTTP adapters
+│   │   ├── models/             # SQLAlchemy ORM models (Camera, SecurityEvent, Evidence)
+│   │   ├── realtime/           # In-process WebSocket event publisher
+│   │   ├── repositories/       # Data access repositories
+│   │   ├── schemas/            # Request/response validation schemas
+│   │   ├── services/           # Event processing & camera services
+│   │   ├── workers/            # Frigate MQTT event listener background worker
+│   │   └── main.py             # Application entrypoint
+│   ├── tests/                  # Pytest test suite (unit & integration)
+│   ├── alembic.ini
+│   ├── requirements.txt
+│   └── README.md
+├── dashboard/                  # Frontend web dashboard (React + Vite, scaffolded)
+├── deployment/                 # Orchestration & infrastructure
+│   ├── mosquitto/              # Eclipse Mosquitto MQTT configuration
+│   ├── docker-compose.yml      # Containerized stack (Frigate, Mosquitto, MediaMTX)
+│   └── .env.example            # Deployment environment variables
+├── docs/                       # Architecture & setup guides
+│   ├── phase1_setup.md         # Phase 1 perception infrastructure setup guide
+│   └── database_contract.md    # Database models & access contract
+├── frigate/                    # Frigate NVR configuration & media
+│   ├── config/frigate.yml
+│   └── media/
+├── tests/                      # System & end-to-end integration tests
+│   └── test_mqtt_subscriber.py # Standalone MQTT subscriber verification
+├── .env.example                # Central environment variables template
+├── .gitignore                  # Monorepo git ignore rules
 └── README.md
 ```
 
@@ -235,85 +250,95 @@ SecurePulse/
 
 ## Installation & Setup
 
-> Setup instructions will be added as the implementation is finalized.
+### Prerequisites
+* **Docker Engine** (v20.10+) & **Docker Compose** (v2.0+)
+* **Python 3.10+**
 
----
+### Step 1: Start Edge Infrastructure
 
-## Usage
+Launch Frigate NVR, Eclipse Mosquitto MQTT Broker, and the MediaMTX RTSP stream simulator:
 
-There are currently no usage instructions as the code implementation has not yet begun.
+```bash
+cd deployment
+cp .env.example .env
+docker compose up -d
+```
 
----
+- **Frigate Web UI**: `http://localhost:5000`
+- **MQTT Broker**: `localhost:1883`
+- **MediaMTX RTSP**: `rtsp://localhost:8554/live`
 
-## Configuration
+### Step 2: Launch Backend Application
 
-Configuration documentation will be added once the system is implemented. Future configurations are expected to include camera streams, detection thresholds, restricted zones, alert destinations, and storage retention.
+In a new terminal:
 
----
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env
 
-## Performance Targets
+# Apply database migrations
+alembic upgrade head
 
-The following are the intended performance targets for the SecurePulse prototype:
+# Start FastAPI server
+uvicorn app.main:app --reload
+```
 
-| Metric | Prototype Target |
-| :--- | :--- |
-| Detection Precision | ≥85% |
-| False Alert Rate | <10% |
-| GPU Alert Latency | <1 second |
-| Edge Alert Latency | <2 seconds |
-| Minimum Input | 720p |
-| Default Retention | 7 days |
+- **Liveness & Readiness**: `http://localhost:8000/health`
+- **REST API Docs**: `http://localhost:8000/docs`
+- **WebSocket Event Stream**: `ws://localhost:8000/api/v1/events/stream`
 
-> **Note:** These are prototype target metrics defined in the PRD, not experimentally validated results unless benchmark evidence is available in the repository.
+### Step 3: Run Tests
 
----
-
-## Privacy & Security
-
-SecurePulse prioritizes privacy through design:
-* **Local Processing:** All video streams are processed at the edge or on local networks.
-* **No Mandatory Cloud Dependency:** No video feeds are required to be sent to external cloud servers for AI processing.
-* **Local Event Storage:** Video clips are kept securely on local storage or NAS.
-* **Configurable Retention:** Automated deletion of old events ensures data minimization.
-* **No Facial Identity Matching:** The v1 prototype focuses on object detection, not facial recognition or identity tracking.
-
-*(Legal and privacy requirements must be evaluated based on jurisdiction before real-world deployment.)*
+```bash
+cd backend
+pytest -v
+```
 
 ---
 
 ## Current Status
 
-> **Status: Prototype Phase**
-
-The repository is currently being initialized. No codebase has been established yet.
+> **Status: Active Development**
 
 **Implemented**
-* None
+* ✅ Edge Perception Stack (Frigate NVR, MediaMTX RTSP simulator, Mosquitto MQTT)
+* ✅ Resilient Frigate MQTT event listener worker with exponential backoff
+* ✅ Deduplication & event normalization pipeline
+* ✅ Asynchronous PostgreSQL persistence layer (SQLAlchemy 2.x, asyncpg, Alembic)
+* ✅ Security Engine integration adapter with configurable fallback (`STORE_UNCLASSIFIED` / `REJECT`)
+* ✅ REST API (`/api/v1/cameras`, `/api/v1/events` with pagination, filtering, date range)
+* ✅ Real-time WebSocket event streaming (`/api/v1/events/stream`)
+* ✅ JWT Bearer token authentication & scope-based RBAC
+* ✅ Test suite covering API, auth, database, event processor, frigate adapter, health, and realtime publisher
 
 **In Progress**
-* None
+* 🔄 Zone breach & intrusion rule evaluations
+* 🔄 React + Vite web dashboard UI (`dashboard/`)
 
 **Planned**
-* Core video processing pipeline
-* YOLO & ByteTrack integration
-* Frontend dashboard
+* 📋 QRT emergency dispatch workflow
+* 📋 Line-crossing & loitering analytics
+* 📋 Multi-camera cross-tracking (v2)
 
 ---
 
 ## Roadmap
 
-* [ ] Single-camera pipeline
-* [ ] YOLO detection
-* [ ] ByteTrack tracking
-* [ ] Zone-based rules
-* [ ] Line-crossing detection
-* [ ] Loitering detection
-* [ ] MQTT/Webhook alerting
-* [ ] Web dashboard
-* [ ] Event storage
-* [ ] Multi-camera GPU pipeline
-* [ ] QRT alert/deployment integration
-* [ ] Further optimization
+* [x] Single-camera RTSP ingestion pipeline
+* [x] Frigate object detection (person & vehicle)
+* [x] MQTT event ingestion & normalization
+* [x] Asynchronous PostgreSQL storage & migrations
+* [x] REST API for camera and event querying
+* [x] Real-time WebSocket event broadcast
+* [x] JWT authentication & scope authorization
+* [ ] Zone-based intrusion rules
+* [ ] Loitering & line-crossing detection
+* [ ] React web dashboard
+* [ ] QRT alert/deployment emergency workflow
+* [ ] Multi-camera GPU pipeline & cross-re-identification
 
 ---
 

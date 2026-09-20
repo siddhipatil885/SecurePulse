@@ -17,7 +17,7 @@ Phase 1 initializes the edge-first perception infrastructure for SecurePulse usi
 ## Directory Structure
 
 ```text
-ai-cctv/
+SecurePulse/
 ├── frigate/
 │   ├── config/
 │   │   └── frigate.yml       # Frigate NVR configuration
@@ -41,7 +41,7 @@ ai-cctv/
 Copy the sample environment file to `.env`:
 
 ```bash
-cd ai-cctv/deployment
+cd deployment
 cp .env.example .env
 ```
 
