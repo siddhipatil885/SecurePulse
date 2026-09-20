@@ -35,6 +35,7 @@ class EventType(str, Enum):
     ZONE_ENTRY = "ZONE_ENTRY"
     LOITERING = "LOITERING"
     MULTIPLE_PERSONS = "MULTIPLE_PERSONS"
+    LINE_CROSSING = "LINE_CROSSING"
 
 
 class Severity(str, Enum):
@@ -124,6 +125,26 @@ class Zone(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Tripwire
+# ---------------------------------------------------------------------------
+
+class Tripwire(BaseModel):
+    """A virtual tripwire defined as a line segment for a specific camera.
+
+    Coordinates are in pixel space matching the camera's frame dimensions.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    camera_id: str = Field(min_length=1)
+    start_point: Point
+    end_point: Point
+    enabled: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Input: DetectionEvent
 # ---------------------------------------------------------------------------
 
@@ -174,6 +195,7 @@ class SecurityRuleResult(BaseModel):
     camera_id: str
     object_id: str
     zone_id: str | None = None
+    tripwire_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -198,6 +220,7 @@ class SecurityEventCandidate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: datetime
     zone_id: str | None = None
+    tripwire_id: str | None = None
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -224,4 +247,5 @@ class SecurityContext(BaseModel):
     detection: DetectionEvent
     active_detections: list[DetectionEvent] = Field(default_factory=list)
     zones: list[Zone] = Field(default_factory=list)
+    tripwires: list[Tripwire] = Field(default_factory=list)
     current_time: datetime | None = None

@@ -1,18 +1,19 @@
 export interface Camera {
   id: string;
   name: string;
-  status: 'online' | 'offline';
-  streamUrl?: string;
+  status: 'enabled' | 'disabled';
   lastSeen: string;
-  currentActivity: 'normal' | 'person' | 'suspicious' | 'restricted' | 'critical';
 }
 
 export interface SecurityEvent {
   id: string;
   cameraId: string;
   type: string;
+  objectType?: string;
   timestamp: string;
   confidence?: number;
+  severity?: string;
+  status?: string;
   metadata?: Record<string, any>;
 }
 

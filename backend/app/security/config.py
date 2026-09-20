@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.security.models import Severity, Zone
+from app.security.models import Severity, Tripwire, Zone
 
 
 @dataclass(frozen=True)
@@ -33,8 +33,10 @@ class SecurityConfig:
         zone_entry_cooldown_seconds: Cooldown for ZONE_ENTRY.
         loitering_cooldown_seconds: Cooldown for LOITERING.
         multiple_person_cooldown_seconds: Cooldown for MULTIPLE_PERSONS.
+        line_crossing_cooldown_seconds: Cooldown for LINE_CROSSING.
         severity_map: Override default severity for any event type.
         zones: Restricted zones to evaluate against.
+        tripwires: Virtual tripwires to evaluate against.
     """
 
     # --- Detection filtering ---
@@ -49,12 +51,14 @@ class SecurityConfig:
     zone_entry_cooldown_seconds: float = 30.0
     loitering_cooldown_seconds: float = 60.0
     multiple_person_cooldown_seconds: float = 30.0
+    line_crossing_cooldown_seconds: float = 30.0
 
     # --- Severity overrides  (EventType.value → Severity.value) ---
     severity_map: dict[str, str] = field(default_factory=dict)
 
-    # --- Zones ---
+    # --- Zones & Tripwires ---
     zones: list[Zone] = field(default_factory=list)
+    tripwires: list[Tripwire] = field(default_factory=list)
 
     # --- Helpers ---
 
@@ -65,9 +69,14 @@ class SecurityConfig:
             "ZONE_ENTRY": self.zone_entry_cooldown_seconds,
             "LOITERING": self.loitering_cooldown_seconds,
             "MULTIPLE_PERSONS": self.multiple_person_cooldown_seconds,
+            "LINE_CROSSING": self.line_crossing_cooldown_seconds,
         }
         return mapping.get(event_type, 0.0)
 
     def zones_for_camera(self, camera_id: str) -> list[Zone]:
         """Return enabled zones configured for *camera_id*."""
         return [z for z in self.zones if z.camera_id == camera_id and z.enabled]
+
+    def tripwires_for_camera(self, camera_id: str) -> list[Tripwire]:
+        """Return enabled tripwires configured for *camera_id*."""
+        return [t for t in self.tripwires if t.camera_id == camera_id and t.enabled]

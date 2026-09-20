@@ -1,4 +1,19 @@
-# React + TypeScript + Vite
+# SecurePulse Dashboard
+
+The dashboard reads cameras and security events from the backend API. During local
+development, Vite proxies `/api` to `http://localhost:8000` by default.
+
+To use another backend URL, set `VITE_BACKEND_URL` for the dev proxy and
+`VITE_API_BASE_URL` for browser requests, for example:
+
+```sh
+VITE_BACKEND_URL=http://localhost:8000
+VITE_API_BASE_URL=/api/v1
+npm run dev
+```
+
+The UI does not include fallback camera, alert, event, stream, or detection data.
+When the API is unavailable it shows an error state.
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 

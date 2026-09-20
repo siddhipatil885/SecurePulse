@@ -22,7 +22,7 @@ Pipeline::
           ↓
     SecurityEngine
           ↓
-    Person Rule → Zone Rule → Loitering Rule → Multiple Person Rule
+    Person Rule → Zone Rule → Loitering Rule → Line Crossing Rule → Multiple Person Rule
           ↓
     Cooldown Manager
           ↓
@@ -51,6 +51,7 @@ from app.security.models import (
 )
 from app.security.rules.base import SecurityRule
 from app.security.rules.loitering import LoiteringRule
+from app.security.rules.line_crossing import LineCrossingRule
 from app.security.rules.multiple_person import MultiplePersonRule
 from app.security.rules.person import PersonDetectedRule
 from app.security.rules.zone import ZoneEntryRule
@@ -66,7 +67,7 @@ class SecurityEngine:
         config: Immutable engine configuration.
         rules: Optional explicit rule list.  When ``None`` the engine
             instantiates the default rule set (person, zone, loitering,
-            multiple-person).
+            line-crossing, multiple-person).
     """
 
     def __init__(
@@ -87,6 +88,7 @@ class SecurityEngine:
                 PersonDetectedRule(),
                 ZoneEntryRule(),
                 LoiteringRule(self._config),
+                LineCrossingRule(self._config),
                 MultiplePersonRule(self._config),
             ]
 
@@ -137,6 +139,7 @@ class SecurityEngine:
             detection=detection,
             active_detections=active_detections or [detection],
             zones=zones,
+            tripwires=self._config.tripwires_for_camera(detection.camera_id),
             current_time=now,
         )
 
@@ -181,6 +184,7 @@ class SecurityEngine:
                     confidence=detection.confidence,
                     timestamp=now,
                     zone_id=result.zone_id,
+                    tripwire_id=result.tripwire_id,
                     reason=result.reason,
                     metadata=result.metadata,
                 )

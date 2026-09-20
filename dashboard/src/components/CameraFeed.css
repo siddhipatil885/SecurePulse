@@ -22,19 +22,6 @@
   background-color: #071720;
 }
 
-.mock-video-noise {
-  width: 100%;
-  height: 100%;
-  background-color: #1a3c4f;
-  background-image: repeating-linear-gradient(
-    transparent,
-    transparent 2px,
-    rgba(146, 203, 219, 0.05) 2px,
-    rgba(146, 203, 219, 0.05) 4px
-  );
-  filter: sepia(100%) hue-rotate(170deg) saturate(150%) brightness(0.6) contrast(1.2);
-}
-
 .offline-message {
   color: var(--status-red);
   font-size: 1.2rem;
