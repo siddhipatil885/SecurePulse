@@ -5,7 +5,7 @@ Phase 1 provides the FastAPI application foundation, typed environment settings,
 ## Run locally
 
 ```powershell
-cd ai-cctv/backend
+cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
