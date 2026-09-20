@@ -25,7 +25,7 @@ const SecuritySummary: React.FC<SecuritySummaryProps> = ({ status }) => {
       </div>
       
       <div className="summary-item">
-        <div className="summary-label">Cameras Online</div>
+        <div className="summary-label">Cameras Enabled</div>
         <div className="summary-value">
           <span className={status.camerasOnline === status.totalCameras ? 'success' : 'warning'}>
             {status.camerasOnline}

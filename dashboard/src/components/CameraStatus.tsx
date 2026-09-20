@@ -19,7 +19,7 @@ const CameraStatus: React.FC<CameraStatusProps> = ({ cameras }) => {
               <div className="camera-status-name">{cam.id}</div>
               <div className={`camera-status-indicator ${cam.status}`}>
                 <span className="status-dot"></span>
-                {cam.status === 'online' ? 'Online' : 'Offline'}
+                {cam.status === 'enabled' ? 'Enabled' : 'Disabled'}
               </div>
             </div>
           ))}

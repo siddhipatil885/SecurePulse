@@ -159,8 +159,8 @@
   font-weight: 600;
 }
 
-.camera-status-indicator.online { color: var(--text-muted); }
-.camera-status-indicator.online .status-dot { background-color: var(--status-green); }
+.camera-status-indicator.enabled { color: var(--text-muted); }
+.camera-status-indicator.enabled .status-dot { background-color: var(--status-green); }
 
-.camera-status-indicator.offline { color: var(--status-red); }
-.camera-status-indicator.offline .status-dot { background-color: var(--status-red); }
+.camera-status-indicator.disabled { color: var(--status-red); }
+.camera-status-indicator.disabled .status-dot { background-color: var(--status-red); }

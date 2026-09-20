@@ -3,7 +3,10 @@
 import pytest
 
 from app.security.models import Point
-from app.security.zones.geometry import is_point_inside_polygon
+from app.security.zones.geometry import (
+    do_line_segments_intersect,
+    is_point_inside_polygon,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -115,3 +118,24 @@ class TestEdgeCases:
         ]
         assert is_point_inside_polygon(Point(x=50000, y=50000), big) is True
         assert is_point_inside_polygon(Point(x=200000, y=50000), big) is False
+
+
+class TestLineSegmentIntersection:
+
+    def test_crossing_segments_intersect(self) -> None:
+        assert do_line_segments_intersect(
+            Point(x=0, y=5), Point(x=10, y=5),
+            Point(x=5, y=0), Point(x=5, y=10),
+        ) is True
+
+    def test_endpoint_touch_intersects(self) -> None:
+        assert do_line_segments_intersect(
+            Point(x=0, y=0), Point(x=5, y=5),
+            Point(x=5, y=5), Point(x=10, y=0),
+        ) is True
+
+    def test_parallel_segments_do_not_intersect(self) -> None:
+        assert do_line_segments_intersect(
+            Point(x=0, y=0), Point(x=10, y=0),
+            Point(x=0, y=5), Point(x=10, y=5),
+        ) is False

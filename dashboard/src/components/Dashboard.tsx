@@ -5,31 +5,43 @@ import SecuritySummary from './SecuritySummary';
 import ActiveAlerts from './ActiveAlerts';
 import RecentEvents from './RecentEvents';
 import CameraStatus from './CameraStatus';
-import { mockCameras, mockAlerts, mockEvents, getPriorityCamera } from '../mock';
+import { fetchDashboardData } from '../api';
 import type { Camera, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
 const Dashboard: React.FC = () => {
-  const [cameras] = useState<Camera[]>(mockCameras);
-  const [alerts] = useState<SecurityAlert[]>(mockAlerts);
-  const [events] = useState<SecurityEvent[]>(mockEvents);
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
+  const [events, setEvents] = useState<SecurityEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const [primaryCameraId, setPrimaryCameraId] = useState<string | null>(null);
 
-  // Automatically determine the priority camera if the user hasn't explicitly selected one
-  // In a real app, this might reset after a timeout or when the activity ends.
   useEffect(() => {
-    if (!primaryCameraId) {
-      const priorityCam = getPriorityCamera(cameras, alerts, events);
-      if (priorityCam) {
-        setPrimaryCameraId(priorityCam.id);
-      }
-    }
-  }, [cameras, alerts, events, primaryCameraId]);
+    let active = true;
+    fetchDashboardData()
+      .then((data) => {
+        if (!active) return;
+        setCameras(data.cameras);
+        setAlerts(data.alerts);
+        setEvents(data.events);
+        setPrimaryCameraId((current) => current ?? data.cameras[0]?.id ?? null);
+      })
+      .catch((requestError: unknown) => {
+        if (active) {
+          setError(requestError instanceof Error ? requestError.message : 'Unable to load dashboard data');
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  const primaryCamera = useMemo(() => 
-    cameras.find(c => c.id === primaryCameraId) || cameras[0]
-  , [cameras, primaryCameraId]);
+  const primaryCamera = useMemo(() => cameras.find(c => c.id === primaryCameraId) ?? cameras[0], [cameras, primaryCameraId]);
 
   // The secondary cameras should be the next two in priority, or just the first two available
   // Exclude the primary camera.
@@ -38,13 +50,13 @@ const Dashboard: React.FC = () => {
   }, [cameras, primaryCamera]);
 
   const systemStatus: SystemStatus = useMemo(() => ({
-    online: true,
+    online: !error,
     activeAlerts: alerts.filter(a => a.status === 'active').length,
     criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
-    camerasOnline: cameras.filter(c => c.status === 'online').length,
+    camerasOnline: cameras.filter(c => c.status === 'enabled').length,
     totalCameras: cameras.length,
-    peopleDetected: events.filter(e => e.type === 'Person Detected').length // mock stat
-  }), [alerts, cameras, events]);
+    peopleDetected: events.filter(e => e.objectType === 'person').length
+  }), [alerts, cameras, error, events]);
 
   const handleSelectCamera = (cameraId: string) => {
     setPrimaryCameraId(cameraId);
@@ -55,6 +67,11 @@ const Dashboard: React.FC = () => {
       <Header status={systemStatus} />
       
       <main className="dashboard-main">
+        {loading && <div className="empty-state">Loading dashboard data...</div>}
+        {error && <div className="empty-state">Unable to load dashboard data: {error}</div>}
+        {!loading && !error && !primaryCamera && <div className="empty-state">No cameras are configured.</div>}
+        {!loading && !error && primaryCamera && (
+          <>
         <div className="dashboard-center-section">
           <CameraMonitor 
             primaryCamera={primaryCamera} 
@@ -69,6 +86,8 @@ const Dashboard: React.FC = () => {
           <RecentEvents events={events} />
           <CameraStatus cameras={cameras} />
         </div>
+          </>
+        )}
       </main>
     </div>
   );
