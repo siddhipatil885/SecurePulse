@@ -1,0 +1,166 @@
+.data-panel {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 250px;
+}
+
+.panel-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.panel-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.panel-content {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Alert List Styles */
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alert-item {
+  display: flex;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.alert-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.alert-severity {
+  font-size: 0.7rem;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 2px;
+  height: fit-content;
+}
+.alert-severity.critical { background-color: rgba(239, 68, 68, 0.2); color: var(--status-red); border: 1px solid var(--status-red); }
+.alert-severity.warning { background-color: rgba(245, 158, 11, 0.2); color: var(--status-amber); border: 1px solid var(--status-amber); }
+
+.alert-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alert-type {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.alert-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Event List Styles */
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-item {
+  display: flex;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.event-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.event-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.event-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.event-type {
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.event-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.event-confidence {
+  color: var(--status-green);
+}
+
+/* Camera Status Styles */
+.camera-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.camera-status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.camera-status-name {
+  font-size: 0.85rem;
+  color: var(--text-main);
+  font-family: monospace;
+}
+
+.camera-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.camera-status-indicator.online { color: var(--text-muted); }
+.camera-status-indicator.online .status-dot { background-color: var(--status-green); }
+
+.camera-status-indicator.offline { color: var(--status-red); }
+.camera-status-indicator.offline .status-dot { background-color: var(--status-red); }

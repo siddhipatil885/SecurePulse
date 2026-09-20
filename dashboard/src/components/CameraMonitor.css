@@ -1,0 +1,58 @@
+.camera-monitor-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.primary-camera-wrapper {
+  flex: 1;
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  min-height: 300px;
+}
+
+.secondary-cameras-wrapper {
+  display: flex;
+  gap: 16px;
+  height: 150px;
+}
+
+.secondary-camera-item {
+  flex: 1;
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.secondary-camera-item:hover {
+  border-color: var(--text-muted);
+}
+
+@media (min-width: 1024px) {
+  .camera-monitor-container {
+    flex-direction: row;
+  }
+  
+  .primary-camera-wrapper {
+    flex: 7; /* ~70% width */
+    min-height: unset;
+  }
+  
+  .secondary-cameras-wrapper {
+    flex: 3; /* ~30% width */
+    flex-direction: column;
+    height: 100%;
+  }
+  
+  .secondary-camera-item {
+    height: 100%;
+  }
+}

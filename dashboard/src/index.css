@@ -1,0 +1,36 @@
+:root {
+  --bg-dark: #05080c;
+  --bg-panel: #0a1017;
+  --bg-panel-hover: #101a24;
+  --text-main: #8bbdc9;
+  --text-muted: #538190;
+  --border-subtle: #152836;
+  --accent-blue: #4cc2d1;
+  --status-red: #ef4444;
+  --status-amber: #f59e0b;
+  --status-green: #10b981;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

@@ -1,0 +1,50 @@
+.dashboard-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.dashboard-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.dashboard-center-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 50vh;
+}
+
+.dashboard-right-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 1024px) {
+  .dashboard-main {
+    flex-direction: row;
+    padding: 24px;
+    gap: 24px;
+  }
+  
+  .dashboard-center-section {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .dashboard-right-sidebar {
+    width: 340px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding-right: 8px;
+    gap: 24px;
+  }
+}
+
