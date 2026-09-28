@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
@@ -60,6 +61,7 @@ class EventProcessor:
         security_engine: SecurityEngine | None = None,
         security_engine_failure_mode: str = "STORE_UNCLASSIFIED",
         publisher: EventPublisher | None = None,
+        event_cooldown_seconds: float = 30.0,
     ) -> None:
         self.session = session
         self.camera_repository = camera_repository
@@ -67,6 +69,7 @@ class EventProcessor:
         self.security_engine = security_engine
         self.security_engine_failure_mode = security_engine_failure_mode
         self.publisher = publisher
+        self.event_cooldown_seconds = event_cooldown_seconds
 
     async def process(self, detection: DetectionEvent) -> EventProcessResult:
         """Process one detection with an idempotent database transaction."""
@@ -81,13 +84,73 @@ class EventProcessor:
         existing = await self.event_repository.get_by_frigate_event_id(
             detection.source_event_id
         )
+        
+        # Handle lifecycle events: new, update, end
+        lifecycle = detection.metadata.get("lifecycle")
+        
+        # If event already exists, it's an update or end
         if existing is not None:
-            logger.info(
-                "Ignored duplicate detection",
-                extra={"source_event_id": detection.source_event_id},
-            )
+            if lifecycle in {"update", "end"}:
+                existing.object_type = detection.object_type
+                existing.confidence = detection.confidence
+                existing.event_metadata = {
+                    **(existing.event_metadata or {}),
+                    **detection.metadata,
+                }
+
+                # End events carry the final timestamp and close the record.
+                if lifecycle == "end":
+                    existing.status = "CLOSED"
+                    end_time = self._parse_event_timestamp(
+                        detection.metadata.get("end_time")
+                    )
+                    if end_time is not None:
+                        existing.timestamp = end_time
+
+                try:
+                    await self.session.commit()
+                    logger.info(
+                        "Updated Frigate event",
+                        extra={
+                            "source_event_id": detection.source_event_id,
+                            "lifecycle": lifecycle,
+                        },
+                    )
+                except Exception:
+                    await self.session.rollback()
+                    raise
+
+                if self.publisher is not None:
+                    try:
+                        await self.publisher.publish(existing)
+                    except Exception:
+                        logger.exception("Failed to publish updated security event")
+            else:
+                logger.debug(
+                    "Ignored duplicate/update detection",
+                    extra={"source_event_id": detection.source_event_id, "lifecycle": lifecycle},
+                )
             return EventProcessResult(event=existing, duplicate=True)
 
+        if lifecycle == "new" and self.event_cooldown_seconds > 0:
+            recent = await self.event_repository.get_recent_by_camera_object(
+                camera.id,
+                detection.object_type,
+                detection.timestamp - timedelta(seconds=self.event_cooldown_seconds),
+            )
+            if recent is not None:
+                logger.info(
+                    "Suppressed repeated Frigate detection",
+                    extra={
+                        "source_event_id": detection.source_event_id,
+                        "camera": detection.camera,
+                        "object_type": detection.object_type,
+                        "replaced_event_id": recent.id,
+                    },
+                )
+                return EventProcessResult(event=recent, duplicate=True)
+
+        # NEW event - create it
         decision = await self._get_security_decision(detection, camera)
         event = self._build_event(detection, camera, decision)
         try:
@@ -116,6 +179,20 @@ class EventProcessor:
             extra={"source_event_id": detection.source_event_id, "camera_id": camera.id},
         )
         return EventProcessResult(event=event, duplicate=False)
+
+    @staticmethod
+    def _parse_event_timestamp(value: object) -> datetime | None:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        return None
 
     @staticmethod
     def _validate_detection(detection: DetectionEvent) -> None:

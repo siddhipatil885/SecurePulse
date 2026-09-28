@@ -1,6 +1,22 @@
-version: '3.9'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: securepulse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-securepulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepulse}
+      POSTGRES_DB: ${POSTGRES_DB:-securepulse}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   mqtt:
     image: eclipse-mosquitto:2.0
     container_name: securepulse-mqtt
@@ -15,16 +31,12 @@ services:
   frigate:
     image: ghcr.io/blakeblackshear/frigate:0.13.2
     container_name: securepulse-frigate
-    privileged: true
     restart: unless-stopped
     shm_size: "256mb"
-    devices:
-      - /dev/bus/usb:/dev/bus/usb # For Coral TPU if connected
     ports:
       - "${FRIGATE_PORT:-5000}:5000"
-      - "8554:8554" # RTSP feeds from go2rtc
-      - "8555:8555/tcp" # WebRTC
-      - "8555:8555/udp" # WebRTC
+      - "${FRIGATE_WEBRTC_PORT:-8556}:8555/tcp" # WebRTC
+      - "${FRIGATE_WEBRTC_PORT:-8556}:8555/udp" # WebRTC
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ../frigate/config/frigate.yml:/config/frigate.yml
@@ -36,9 +48,41 @@ services:
     environment:
       - FRIGATE_RTSP_PASSWORD=${FRIGATE_RTSP_PASSWORD:-secret}
       - RTSP_STREAM_URL=${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+      - FRIGATE_WEBRTC_CANDIDATE=${FRIGATE_WEBRTC_CANDIDATE:-127.0.0.1:8556}
       - TZ=${TZ:-UTC}
     depends_on:
       - mqtt
+
+  backend:
+    build:
+      context: ../backend
+    container_name: securepulse-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-securepulse}:${POSTGRES_PASSWORD:-securepulse}@postgres:5432/${POSTGRES_DB:-securepulse}
+      GO2RTC_URL: http://frigate:1984
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      FRIGATE_MQTT_TOPIC: frigate/events
+      SECURITY_ENGINE_FAILURE_MODE: ${SECURITY_ENGINE_FAILURE_MODE:-STORE_UNCLASSIFIED}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      JWT_SECRET: ${JWT_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - default
+      - frigate
 
   # Simulated RTSP Stream for local offline development & testing
   rtsp-sim:
@@ -49,5 +93,11 @@ services:
       - "8554:8554"
 
 volumes:
+  postgres_data:
   mosquitto_data:
   mosquitto_log:
+
+networks:
+  frigate:
+    external: true
+    name: frigate_default

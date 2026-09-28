@@ -1,7 +1,9 @@
 """Phase 6 API tests with service-level dependency overrides."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -97,3 +99,37 @@ async def test_missing_resources_use_structured_errors() -> None:
     }
     assert event.status_code == 404
     assert event.json()["error"]["code"] == "EVENT_NOT_FOUND"
+
+
+@pytest.mark.anyio
+async def test_webrtc_offer_uses_enabled_camera_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    offer = "v=0\\r\\no=- offer"
+    answer = "v=0\\r\\no=- answer"
+    forwarded: dict[str, str] = {}
+
+    def handle_go2rtc(request: httpx.Request) -> httpx.Response:
+        forwarded["src"] = request.url.params["src"]
+        forwarded["offer"] = request.content.decode()
+        return httpx.Response(201, content=answer, headers={"Content-Type": "application/sdp"})
+
+    transport = httpx.MockTransport(handle_go2rtc)
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "app.api.frigate.get_settings",
+        lambda: SimpleNamespace(go2rtc_url="http://go2rtc:1984"),
+    )
+    monkeypatch.setattr(
+        "app.api.frigate.httpx.AsyncClient",
+        lambda **kwargs: real_async_client(transport=transport, **kwargs),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/frigate/cameras/1/webrtc",
+            content=offer,
+            headers={"Content-Type": "application/sdp"},
+        )
+
+    assert response.status_code == 201
+    assert response.text == answer
+    assert forwarded == {"src": "front_door", "offer": offer}

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Camera } from '../types';
+import { frigateWebRtcUrl } from '../api';
 import './CameraFeed.css';
 
 interface CameraFeedProps {
@@ -9,19 +10,93 @@ interface CameraFeedProps {
 
 const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
   const [time, setTime] = useState<Date>(new Date());
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [streamState, setStreamState] = useState<'connecting' | 'live' | 'unavailable'>('connecting');
   
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let peer: RTCPeerConnection | null = null;
+
+    const startStream = async () => {
+      if (camera.status !== 'enabled' || !videoRef.current) return;
+      setStreamState('connecting');
+      const connection = new RTCPeerConnection();
+      peer = connection;
+      connection.addTransceiver('video', { direction: 'recvonly' });
+      connection.ontrack = (event) => {
+        if (!disposed && videoRef.current) {
+          videoRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+          setStreamState('live');
+        }
+      };
+      connection.onconnectionstatechange = () => {
+        if (!disposed && connection.connectionState === 'failed') {
+          setStreamState('unavailable');
+        }
+      };
+
+      try {
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        if (connection.iceGatheringState !== 'complete') {
+          await new Promise<void>((resolve) => {
+            const gatheringComplete = () => {
+              if (connection.iceGatheringState === 'complete') {
+                window.clearTimeout(timeout);
+                connection.removeEventListener('icegatheringstatechange', gatheringComplete);
+                resolve();
+              }
+            };
+            const timeout = window.setTimeout(() => {
+              connection.removeEventListener('icegatheringstatechange', gatheringComplete);
+              resolve();
+            }, 8000);
+            connection.addEventListener('icegatheringstatechange', gatheringComplete);
+            gatheringComplete();
+          });
+        }
+        const response = await fetch(frigateWebRtcUrl(camera.id), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: connection.localDescription?.sdp,
+        });
+        if (!response.ok) throw new Error(`RTC negotiation failed (${response.status})`);
+        await connection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+      } catch {
+        if (!disposed) setStreamState('unavailable');
+      }
+    };
+
+    void startStream();
+    return () => {
+      disposed = true;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      peer?.close();
+    };
+  }, [camera.id, camera.status]);
+
   return (
     <div className={`camera-feed-container ${isPrimary ? 'primary' : 'secondary'} ${camera.status === 'disabled' ? 'offline' : ''}`}>
       <div className="video-placeholder">
         {camera.status === 'enabled' ? (
-          <div className="offline-message">LIVE STREAM UNAVAILABLE</div>
+          <video
+            ref={videoRef}
+            className="camera-snapshot"
+            autoPlay
+            playsInline
+            muted
+            aria-label={`Live video from ${camera.name}`}
+          />
         ) : (
           <div className="offline-message">CAMERA DISABLED</div>
+        )}
+        {camera.status === 'enabled' && streamState !== 'live' && (
+          <div className="offline-message">{streamState === 'connecting' ? 'CONNECTING TO CAMERA' : 'LIVE STREAM UNAVAILABLE'}</div>
         )}
       </div>
 
@@ -32,7 +107,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
       <div className="overlay-top-right">
         <div className={`live-indicator ${camera.status === 'enabled' ? 'online' : 'offline'}`}>
           <span className="live-dot"></span>
-          {camera.status === 'enabled' ? 'ENABLED' : 'DISABLED'}
+          {camera.status !== 'enabled' ? 'DISABLED' : streamState === 'live' ? 'LIVE' : 'CONNECTING'}
         </div>
       </div>
 

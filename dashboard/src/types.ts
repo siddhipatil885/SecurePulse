@@ -1,6 +1,7 @@
 export interface Camera {
   id: string;
   name: string;
+  frigateCameraName: string;
   status: 'enabled' | 'disabled';
   lastSeen: string;
 }

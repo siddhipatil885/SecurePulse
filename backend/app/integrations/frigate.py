@@ -43,6 +43,47 @@ class FrigateEventParser:
             raise FrigatePayloadError("Frigate event has no numeric top_score")
 
         timestamp = self._parse_timestamp(event.get("start_time", event.get("timestamp")))
+        
+        # Preserve bounding box as [x1, y1, x2, y2] and tracking metadata
+        metadata = {
+            "lifecycle": lifecycle,
+            "zones": event.get("zones", []),
+            "has_snapshot": bool(event.get("has_snapshot", False)),
+            "has_clip": bool(event.get("has_clip", False)),
+        }
+        
+        # Extract bounding box if present
+        if "box" in event and isinstance(event["box"], (list, tuple)) and len(event["box"]) == 4:
+            metadata["bounding_box"] = list(event["box"])
+        
+        # Extract optional tracking fields
+        if "path_data" in event:
+            metadata["path_data"] = event["path_data"]
+        if "start_time" in event:
+            metadata["start_time"] = event["start_time"]
+        if "end_time" in event:
+            metadata["end_time"] = event["end_time"]
+        if "current_zones" in event:
+            metadata["current_zones"] = event["current_zones"]
+        if "entered_zones" in event:
+            metadata["entered_zones"] = event["entered_zones"]
+        if "current_estimated_speed" in event:
+            metadata["current_estimated_speed"] = event["current_estimated_speed"]
+        if "velocity_angle" in event:
+            metadata["velocity_angle"] = event["velocity_angle"]
+        if "motionless_count" in event:
+            metadata["motionless_count"] = event["motionless_count"]
+        if "position_changes" in event:
+            metadata["position_changes"] = event["position_changes"]
+        if "pending_loitering" in event:
+            metadata["pending_loitering"] = event["pending_loitering"]
+        if "max_severity" in event:
+            metadata["max_severity"] = event["max_severity"]
+        if "score" in event and isinstance(event["score"], (int, float)):
+            metadata["score"] = event["score"]
+        if "computed_score" in event and isinstance(event["computed_score"], (int, float)):
+            metadata["computed_score"] = event["computed_score"]
+        
         return DetectionEvent(
             source="frigate",
             source_event_id=source_event_id,
@@ -50,12 +91,7 @@ class FrigateEventParser:
             object_type=object_type,
             confidence=confidence,
             timestamp=timestamp,
-            metadata={
-                "lifecycle": lifecycle,
-                "zones": event.get("zones", []),
-                "has_snapshot": bool(event.get("has_snapshot", False)),
-                "has_clip": bool(event.get("has_clip", False)),
-            },
+            metadata=metadata,
         )
 
     @staticmethod
@@ -123,10 +159,10 @@ class FrigateClient:
         return self._connected
 
     def start(self) -> bool:
-        """Start the background MQTT loop; return false if initial connection fails."""
+        """Start the background MQTT loop and allow it to reconnect."""
 
         try:
-            self.client.connect(
+            self.client.connect_async(
                 self.settings.mqtt_host,
                 self.settings.mqtt_port,
                 keepalive=60,
@@ -140,9 +176,9 @@ class FrigateClient:
     def stop(self) -> None:
         """Stop the MQTT loop and disconnect cleanly."""
 
-        self.client.loop_stop()
         if self._connected:
             self.client.disconnect()
+        self.client.loop_stop()
         self._connected = False
 
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: dict[str, Any], rc: int) -> None:

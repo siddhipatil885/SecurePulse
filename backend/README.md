@@ -13,11 +13,11 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload
 ```
 
-The liveness endpoint is available at `http://localhost:8000/health`. Readiness checks PostgreSQL and returns `503` when the database is unavailable; Frigate and security-engine checks remain explicit `not_checked` placeholders until their service integration phases.
+The liveness endpoint is available at `http://localhost:8000/health`. Readiness checks PostgreSQL and the live Frigate MQTT connection, returning `503` when either dependency is unavailable.
 
 Frigate events are consumed from `FRIGATE_MQTT_TOPIC` (default `frigate/events`). The adapter drops malformed payloads, uses Frigate's stable event ID, and reconnects with bounded Paho backoff after broker interruptions.
 
-The `EventProcessor` maps the normalized camera identifier to an enabled camera, ignores duplicate Frigate event IDs, and stores new detections as `UNCLASSIFIED` until the Phase 5 security engine returns a decision.
+The `EventProcessor` maps the normalized camera identifier to an enabled camera, deduplicates Frigate event IDs, persists update/end lifecycle messages, and stores new detections as `UNCLASSIFIED` until the security engine returns a decision.
 
 The security engine receives a typed context and returns an event type, score, severity, and optional reason. Set `SECURITY_ENGINE_FAILURE_MODE=STORE_UNCLASSIFIED` to retain observations without inventing a risk classification, or `REJECT` to avoid storing events when the engine is unavailable.
 

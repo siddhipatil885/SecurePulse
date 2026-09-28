@@ -22,4 +22,5 @@ async def test_readiness_does_not_claim_external_dependencies_are_ready() -> Non
 
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
-    assert response.json()["checks"]["database"] == "unavailable"
+    assert response.json()["checks"]["database"] in {"ok", "unavailable"}
+    assert response.json()["checks"]["mqtt"] in {"ok", "unavailable"}

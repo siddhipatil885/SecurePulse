@@ -5,7 +5,8 @@ from datetime import timezone
 import pytest
 
 from app.domain.events import DetectionEvent
-from app.integrations.frigate import FrigateEventParser, FrigatePayloadError
+from app.core.config import Settings
+from app.integrations.frigate import FrigateClient, FrigateEventParser, FrigatePayloadError
 
 
 def test_parser_normalizes_frigate_event() -> None:
@@ -57,3 +58,27 @@ def test_detection_event_rejects_out_of_range_confidence() -> None:
             confidence=1.1,
             timestamp="2026-09-19T19:30:20Z",
         )
+
+
+def test_client_starts_reconnectable_loop_without_blocking_for_broker() -> None:
+    client = FrigateClient(
+        on_detection=lambda _: None,
+        settings=Settings(mqtt_host="broker", mqtt_port=1883),
+    )
+    client.client.connect_async = lambda host, port, keepalive: None  # type: ignore[method-assign]
+    client.client.loop_start = lambda: None  # type: ignore[method-assign]
+
+    assert client.start() is True
+    assert client.connected is False
+
+
+def test_client_connection_callbacks_control_live_state() -> None:
+    client = FrigateClient(
+        on_detection=lambda _: None,
+        settings=Settings(),
+    )
+
+    client._on_connect(client.client, None, {}, 0)
+    assert client.connected is True
+    client._on_disconnect(client.client, None, 1)
+    assert client.connected is False

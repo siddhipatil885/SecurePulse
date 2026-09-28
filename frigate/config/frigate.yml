@@ -5,6 +5,14 @@ mqtt:
   topic_prefix: frigate
   client_id: frigate
 
+go2rtc:
+  webrtc:
+    candidates:
+      - ${FRIGATE_WEBRTC_CANDIDATE:-127.0.0.1:8555}
+  streams:
+    front_door: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+    laptop_camera: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+
 detectors:
   cpu1:
     type: cpu
@@ -17,7 +25,7 @@ detect:
   enabled: true
   width: 1280
   height: 720
-  fps: 5
+  fps: ${DETECT_FPS:-5}
 
 objects:
   track:
@@ -33,7 +41,8 @@ cameras:
   front_door:
     ffmpeg:
       inputs:
-        - path: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+        - path: rtsp://127.0.0.1:8554/front_door
+          input_args: preset-rtsp-restream
           roles:
             - detect
             - record
@@ -41,7 +50,7 @@ cameras:
       enabled: true
       width: 1280
       height: 720
-      fps: 5
+      fps: ${DETECT_FPS:-5}
     objects:
       track:
         - person

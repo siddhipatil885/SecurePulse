@@ -28,6 +28,24 @@ class EventRepository:
         )
         return await self.session.scalar(statement)
 
+    async def get_recent_by_camera_object(
+        self,
+        camera_id: int,
+        object_type: str,
+        since: datetime,
+    ) -> SecurityEvent | None:
+        statement = (
+            select(SecurityEvent)
+            .where(
+                SecurityEvent.camera_id == camera_id,
+                SecurityEvent.object_type == object_type,
+                SecurityEvent.timestamp >= since,
+            )
+            .order_by(SecurityEvent.timestamp.desc())
+            .limit(1)
+        )
+        return await self.session.scalar(statement)
+
     async def list(
         self,
         *,

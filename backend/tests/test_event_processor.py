@@ -48,6 +48,7 @@ def make_processor(
     camera_repository.get_by_frigate_name.return_value = camera
     event_repository = AsyncMock()
     event_repository.get_by_frigate_event_id.return_value = existing
+    event_repository.get_recent_by_camera_object.return_value = None
     def persist(event: SecurityEvent) -> SecurityEvent:
         event.id = event.id or 1
         return event
@@ -95,6 +96,76 @@ async def test_processor_returns_duplicate_without_creating_event() -> None:
     assert result.event.id == 42
     event_repository.create.assert_not_awaited()
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_processor_suppresses_same_object_within_cooldown() -> None:
+    recent = SecurityEvent(id=41, object_type="person")
+    processor, session, _, event_repository = make_processor()
+    event_repository.get_recent_by_camera_object.return_value = recent
+
+    result = await processor.process(
+        make_detection(
+            source_event_id="frigate-new-tracking-id",
+            timestamp=datetime(2026, 9, 19, 19, 30, 40, tzinfo=timezone.utc),
+            metadata={"lifecycle": "new"},
+        )
+    )
+
+    assert result.duplicate is True
+    assert result.event.id == 41
+    event_repository.create.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_processor_persists_update_lifecycle_data() -> None:
+    existing = SecurityEvent(
+        id=42,
+        object_type="person",
+        confidence=0.70,
+        status="UNCLASSIFIED",
+        event_metadata={"lifecycle": "new"},
+    )
+    processor, session, _, event_repository = make_processor(existing=existing)
+
+    result = await processor.process(
+        make_detection(
+            confidence=0.98,
+            metadata={"lifecycle": "update", "zones": ["driveway"], "bounding_box": [1, 2, 3, 4]},
+        )
+    )
+
+    assert result.duplicate is True
+    assert existing.confidence == 0.98
+    assert existing.event_metadata["zones"] == ["driveway"]
+    assert existing.status == "UNCLASSIFIED"
+    event_repository.create.assert_not_awaited()
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_processor_closes_event_on_end_lifecycle() -> None:
+    existing = SecurityEvent(
+        id=42,
+        object_type="person",
+        confidence=0.70,
+        status="OPEN",
+        event_metadata={"lifecycle": "new"},
+    )
+    processor, session, _, event_repository = make_processor(existing=existing)
+
+    result = await processor.process(
+        make_detection(
+            metadata={"lifecycle": "end", "end_time": 1790105425.5}
+        )
+    )
+
+    assert result.duplicate is True
+    assert existing.status == "CLOSED"
+    assert existing.timestamp.timestamp() == 1790105425.5
+    event_repository.create.assert_not_awaited()
+    session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

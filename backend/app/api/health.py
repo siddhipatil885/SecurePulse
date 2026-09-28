@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.database.database import check_database_connection
+import app.main as main_module
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -17,17 +18,21 @@ async def health() -> dict[str, str]:
 
 @router.get("/ready", summary="Check application readiness")
 async def readiness() -> JSONResponse:
-    """Report readiness without pretending unimplemented dependencies are healthy."""
+    """Report readiness with checks for key dependencies."""
 
     database_ready = await check_database_connection()
+    listener = main_module._frigate_listener
+    mqtt_connected = listener is not None and listener.client.connected
+    
+    all_ready = database_ready and mqtt_connected
+    
     return JSONResponse(
-        status_code=200 if database_ready else 503,
+        status_code=200 if all_ready else 503,
         content={
-            "status": "ok" if database_ready else "not_ready",
+            "status": "ok" if all_ready else "not_ready",
             "checks": {
                 "database": "ok" if database_ready else "unavailable",
-                "frigate": "not_checked",
-                "security_engine": "not_checked",
+                "mqtt": "ok" if mqtt_connected else "unavailable",
             },
         },
     )

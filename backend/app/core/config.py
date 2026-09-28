@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535, validation_alias="PORT")
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     frigate_url: str = Field(default="http://localhost:5000", validation_alias="FRIGATE_URL")
+    go2rtc_url: str = Field(default="http://localhost:1984", validation_alias="GO2RTC_URL")
+    frigate_username: str | None = Field(default=None, validation_alias="FRIGATE_USERNAME")
+    frigate_password: str | None = Field(default=None, validation_alias="FRIGATE_PASSWORD")
+    frigate_verify_ssl: bool = Field(default=True, validation_alias="FRIGATE_VERIFY_SSL")
     security_engine_url: str = Field(
         default="http://localhost:8100", validation_alias="SECURITY_ENGINE_URL"
     )
@@ -58,7 +62,12 @@ class Settings(BaseSettings):
     mqtt_reconnect_max_delay: int = Field(
         default=30, ge=1, validation_alias="MQTT_RECONNECT_MAX_DELAY"
     )
+    frigate_event_cooldown_seconds: float = Field(
+        default=30.0, ge=0, validation_alias="FRIGATE_EVENT_COOLDOWN_SECONDS"
+    )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    frame_width: int = Field(default=1280, gt=0, validation_alias="FRAME_WIDTH")
+    frame_height: int = Field(default=720, gt=0, validation_alias="FRAME_HEIGHT")
 
     @model_validator(mode="after")
     def validate_authentication_configuration(self) -> "Settings":

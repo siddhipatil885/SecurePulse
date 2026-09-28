@@ -36,6 +36,7 @@ async def test_frigate_detection_reaches_persistence_and_realtime() -> None:
     )
     event_repository = AsyncMock()
     event_repository.get_by_frigate_event_id.return_value = None
+    event_repository.get_recent_by_camera_object.return_value = None
 
     def persist(event):
         event.id = 101

@@ -5,7 +5,7 @@ import SecuritySummary from './SecuritySummary';
 import ActiveAlerts from './ActiveAlerts';
 import RecentEvents from './RecentEvents';
 import CameraStatus from './CameraStatus';
-import { fetchDashboardData } from '../api';
+import { fetchDashboardData, mapAlert, mapEvent } from '../api';
 import type { Camera, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
@@ -15,6 +15,7 @@ const Dashboard: React.FC = () => {
   const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [streamConnected, setStreamConnected] = useState(false);
   
   const [primaryCameraId, setPrimaryCameraId] = useState<string | null>(null);
 
@@ -41,6 +42,50 @@ const Dashboard: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const socketUrl = import.meta.env.VITE_WS_URL
+      ?? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/events/stream`;
+    const socket = new WebSocket(socketUrl);
+
+    socket.onopen = () => {
+      if (active) setStreamConnected(true);
+    };
+
+    socket.onmessage = (message) => {
+      try {
+        const payload = JSON.parse(message.data) as {
+          type?: string;
+          data?: Parameters<typeof mapEvent>[0];
+        };
+        if (payload.type !== 'security_event' || !payload.data) return;
+        const incoming = mapEvent(payload.data);
+        setEvents((current) => [
+          incoming,
+          ...current.filter((event) => event.id !== incoming.id),
+        ].slice(0, 100));
+        setAlerts((current) => {
+          const isAlert = ['high', 'critical'].includes(incoming.severity?.toLowerCase() ?? '');
+          if (!isAlert) return current.filter((alert) => alert.id !== incoming.id);
+          return [mapAlert(incoming), ...current.filter((alert) => alert.id !== incoming.id)].slice(0, 100);
+        });
+      } catch {
+        setError('Received an invalid live event from the backend');
+      }
+    };
+
+    socket.onerror = () => {
+      if (active) setStreamConnected(false);
+    };
+    socket.onclose = () => {
+      if (active) setStreamConnected(false);
+    };
+    return () => {
+      active = false;
+      socket.close();
+    };
+  }, []);
+
   const primaryCamera = useMemo(() => cameras.find(c => c.id === primaryCameraId) ?? cameras[0], [cameras, primaryCameraId]);
 
   // The secondary cameras should be the next two in priority, or just the first two available
@@ -50,13 +95,13 @@ const Dashboard: React.FC = () => {
   }, [cameras, primaryCamera]);
 
   const systemStatus: SystemStatus = useMemo(() => ({
-    online: !error,
+    online: !error && streamConnected,
     activeAlerts: alerts.filter(a => a.status === 'active').length,
     criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
     camerasOnline: cameras.filter(c => c.status === 'enabled').length,
     totalCameras: cameras.length,
     peopleDetected: events.filter(e => e.objectType === 'person').length
-  }), [alerts, cameras, error, events]);
+  }), [alerts, cameras, error, events, streamConnected]);
 
   const handleSelectCamera = (cameraId: string) => {
     setPrimaryCameraId(cameraId);

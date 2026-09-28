@@ -3,6 +3,7 @@ import type { Camera, SecurityAlert, SecurityEvent } from './types';
 interface ApiCamera {
   id: number;
   name: string;
+  frigate_camera_name: string;
   location: string | null;
   enabled: boolean;
   created_at: string | null;
@@ -46,12 +47,13 @@ function mapCamera(camera: ApiCamera): Camera {
   return {
     id: String(camera.id),
     name: camera.name,
+    frigateCameraName: camera.frigate_camera_name,
     status: camera.enabled ? 'enabled' : 'disabled',
     lastSeen: camera.updated_at ?? camera.created_at ?? '',
   };
 }
 
-function mapEvent(event: ApiEvent): SecurityEvent {
+export function mapEvent(event: ApiEvent): SecurityEvent {
   return {
     id: String(event.id),
     cameraId: String(event.camera_id),
@@ -65,7 +67,7 @@ function mapEvent(event: ApiEvent): SecurityEvent {
   };
 }
 
-function mapAlert(event: SecurityEvent): SecurityAlert {
+export function mapAlert(event: SecurityEvent): SecurityAlert {
   const severity = event.severity?.toLowerCase();
   const status = event.status?.toLowerCase();
   return {
@@ -94,4 +96,8 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     events,
     alerts,
   };
+}
+
+export function frigateWebRtcUrl(cameraId: string): string {
+  return `${apiBaseUrl}/frigate/cameras/${encodeURIComponent(cameraId)}/webrtc`;
 }
