@@ -13,8 +13,9 @@ from app.api.cameras import router as cameras_router
 from app.api.events import router as events_router
 from app.api.frigate import router as frigate_router
 from app.api.realtime import router as realtime_router
+from app.api.tracks import router as tracks_router
 from app.core.config import get_settings
-from app.core.dependencies import get_event_publisher
+from app.core.dependencies import get_event_publisher, get_person_tracker
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.database.database import dispose_database, get_session_factory
@@ -41,10 +42,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logger.info("Application startup", extra={"app_name": settings.app_name})
     event_loop = asyncio.get_running_loop()
+    track_reaper_task: asyncio.Task[None] | None = None
     
     # Initialize MQTT listener
     try:
         event_publisher = get_event_publisher()
+        person_tracker = get_person_tracker()
         session_factory = get_session_factory()
         security_engine = HttpSecurityEngine(settings)
         
@@ -62,6 +65,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                         security_engine_failure_mode=settings.security_engine_failure_mode,
                         publisher=event_publisher,
                         event_cooldown_seconds=settings.frigate_event_cooldown_seconds,
+                        person_tracker=person_tracker,
+                        security_engine_supports_tracking=settings.security_engine_supports_tracking,
                     )
                     result = await processor.process(detection)
                     logger.info(
@@ -90,6 +95,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             logger.info("Frigate MQTT listener started", extra={"host": settings.mqtt_host, "port": settings.mqtt_port})
         else:
             logger.warning("Frigate MQTT listener failed to connect")
+
+        async def expire_lost_tracks() -> None:
+            while True:
+                await asyncio.sleep(1)
+                expired = person_tracker.expire_stale()
+                for camera_id in {track.camera_id for track in expired}:
+                    await event_publisher.publish_tracks(
+                        camera_id, person_tracker.tracks_for_camera(camera_id)
+                    )
+
+        track_reaper_task = asyncio.create_task(expire_lost_tracks())
     except Exception as error:
         logger.error("Failed to initialize MQTT listener", extra={"error": str(error)}, exc_info=True)
     
@@ -99,6 +115,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if _frigate_listener:
         _frigate_listener.stop()
         logger.info("Frigate MQTT listener stopped")
+    if track_reaper_task is not None:
+        track_reaper_task.cancel()
+        try:
+            await track_reaper_task
+        except asyncio.CancelledError:
+            pass
     
     await dispose_database()
     logger.info("Application shutdown")
@@ -132,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(frigate_router, prefix="/api/v1")
     app.include_router(realtime_router, prefix="/api/v1")
+    app.include_router(tracks_router, prefix="/api/v1")
     register_exception_handlers(app)
     return app
 

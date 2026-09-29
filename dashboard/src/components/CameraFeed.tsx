@@ -1,17 +1,23 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { Camera } from '../types';
+import type { PersonTrack } from '../types';
 import { frigateWebRtcUrl } from '../api';
+import DetectionOverlay from './DetectionOverlay';
 import './CameraFeed.css';
 
 interface CameraFeedProps {
   camera: Camera;
   isPrimary: boolean;
+  tracks: PersonTrack[];
 }
 
-const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
+const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) => {
   const [time, setTime] = useState<Date>(new Date());
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'unavailable'>('connecting');
+  const setVideoRef = useCallback((element: HTMLVideoElement | null) => {
+    setVideoElement(element);
+  }, []);
   
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -21,16 +27,17 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
   useEffect(() => {
     let disposed = false;
     let peer: RTCPeerConnection | null = null;
+    const streamVideo = videoElement;
 
     const startStream = async () => {
-      if (camera.status !== 'enabled' || !videoRef.current) return;
+      if (camera.status !== 'enabled' || !streamVideo) return;
       setStreamState('connecting');
       const connection = new RTCPeerConnection();
       peer = connection;
       connection.addTransceiver('video', { direction: 'recvonly' });
       connection.ontrack = (event) => {
-        if (!disposed && videoRef.current) {
-          videoRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+        if (!disposed) {
+          streamVideo.srcObject = event.streams[0] ?? new MediaStream([event.track]);
           setStreamState('live');
         }
       };
@@ -75,17 +82,17 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
     void startStream();
     return () => {
       disposed = true;
-      if (videoRef.current) videoRef.current.srcObject = null;
+      if (streamVideo) streamVideo.srcObject = null;
       peer?.close();
     };
-  }, [camera.id, camera.status]);
+  }, [camera.id, camera.status, videoElement]);
 
   return (
     <div className={`camera-feed-container ${isPrimary ? 'primary' : 'secondary'} ${camera.status === 'disabled' ? 'offline' : ''}`}>
       <div className="video-placeholder">
         {camera.status === 'enabled' ? (
           <video
-            ref={videoRef}
+            ref={setVideoRef}
             className="camera-snapshot"
             autoPlay
             playsInline
@@ -98,6 +105,11 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
         {camera.status === 'enabled' && streamState !== 'live' && (
           <div className="offline-message">{streamState === 'connecting' ? 'CONNECTING TO CAMERA' : 'LIVE STREAM UNAVAILABLE'}</div>
         )}
+        <DetectionOverlay
+          video={videoElement}
+          tracks={tracks}
+          debug={import.meta.env.VITE_DEBUG_DETECTIONS === 'true'}
+        />
       </div>
 
       <div className="overlay-top-left">
@@ -116,6 +128,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary }) => {
           {time.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}<br/>
           {time.toLocaleTimeString('en-GB')}
         </div>
+        <div className="people-count">Current people: {tracks.length}</div>
       </div>
 
     </div>

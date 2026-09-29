@@ -11,6 +11,7 @@ from app.models.camera import Camera
 from app.models.security_event import SecurityEvent
 from app.realtime.publisher import InMemoryEventPublisher
 from app.integrations.security_engine import SecurityEngineError
+from app.services.person_tracker import PersonTracker
 from app.services.event_processor import (
     CameraDisabledError,
     CameraNotFoundError,
@@ -99,7 +100,8 @@ async def test_processor_returns_duplicate_without_creating_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_processor_suppresses_same_object_within_cooldown() -> None:
+async def test_processor_does_not_suppress_a_second_native_frigate_track() -> None:
+    """Database uniqueness, not a camera-wide cooldown, deduplicates frames."""
     recent = SecurityEvent(id=41, object_type="person")
     processor, session, _, event_repository = make_processor()
     event_repository.get_recent_by_camera_object.return_value = recent
@@ -112,10 +114,10 @@ async def test_processor_suppresses_same_object_within_cooldown() -> None:
         )
     )
 
-    assert result.duplicate is True
-    assert result.event.id == 41
-    event_repository.create.assert_not_awaited()
-    session.commit.assert_not_awaited()
+    assert result.duplicate is False
+    assert result.event.frigate_event_id == "frigate-new-tracking-id"
+    event_repository.create.assert_awaited_once()
+    session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -254,3 +256,31 @@ async def test_processor_publishes_only_after_commit() -> None:
     message = await queue.get()
     assert message["type"] == "security_event"
     assert message["data"]["id"] == 1  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_processor_publishes_anonymous_track_separately_from_incident() -> None:
+    """A continuous Frigate track is live UI state, not a new alert per frame."""
+    publisher = InMemoryEventPublisher()
+    queue = await publisher.subscribe()
+    tracker = PersonTracker()
+    processor, _, _, _ = make_processor(publisher=publisher)
+    processor.person_tracker = tracker
+
+    result = await processor.process(
+        make_detection(
+            metadata={
+                "lifecycle": "new",
+                "bounding_box": [128, 72, 512, 648],
+                "frame_width": 1280,
+                "frame_height": 720,
+            }
+        )
+    )
+
+    track_message = await queue.get()
+    event_message = await queue.get()
+    assert track_message["type"] == "person_tracks"
+    assert track_message["data"]["tracks"][0]["track_id"] == "person_track_frigate-123"  # type: ignore[index]
+    assert event_message["type"] == "security_event"
+    assert result.event.event_metadata["track_id"] == "person_track_frigate-123"

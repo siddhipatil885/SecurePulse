@@ -15,6 +15,18 @@ npm run dev
 The UI does not include fallback camera, alert, event, stream, or detection data.
 When the API is unavailable it shows an error state.
 
+## Detection overlay
+
+The dashboard loads `/api/v1/tracks` and consumes `person_tracks` messages on
+the existing WebSocket. Each temporary anonymous person track is rendered in a
+dedicated layer above the WebRTC video. The layer maps normalised detector
+coordinates through the video's `object-fit: cover` rectangle, including crop
+offsets, so boxes remain aligned when the card is resized.
+
+Set `VITE_DEBUG_DETECTIONS=true` only for development to display temporary
+track IDs and confidence. The normal operator view shows only a Person label
+and the current-person count; it never displays or stores facial identities.
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:

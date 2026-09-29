@@ -1,4 +1,4 @@
-import type { Camera, SecurityAlert, SecurityEvent } from './types';
+import type { Camera, PersonTrack, SecurityAlert, SecurityEvent } from './types';
 
 interface ApiCamera {
   id: number;
@@ -27,10 +27,41 @@ interface EventPage {
   items: ApiEvent[];
 }
 
+interface ApiTrack {
+  track_id: string;
+  camera_id: string;
+  object_type: 'person';
+  first_seen: string;
+  last_seen: string;
+  bounding_box: PersonTrack['boundingBox'];
+  confidence: number;
+  frame_width: number;
+  frame_height: number;
+  state: PersonTrack['state'];
+  face_visible: boolean | null;
+}
+
 export interface DashboardData {
   cameras: Camera[];
   events: SecurityEvent[];
   alerts: SecurityAlert[];
+  tracksByCamera: Record<string, PersonTrack[]>;
+}
+
+export function mapTrack(track: ApiTrack): PersonTrack {
+  return {
+    trackId: track.track_id,
+    cameraId: String(track.camera_id),
+    objectType: track.object_type,
+    firstSeen: track.first_seen,
+    lastSeen: track.last_seen,
+    boundingBox: track.bounding_box,
+    confidence: track.confidence,
+    frameWidth: track.frame_width,
+    frameHeight: track.frame_height,
+    state: track.state,
+    faceVisible: track.face_visible,
+  };
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '');
@@ -81,9 +112,10 @@ export function mapAlert(event: SecurityEvent): SecurityAlert {
 }
 
 export async function fetchDashboardData(): Promise<DashboardData> {
-  const [apiCameras, eventPage] = await Promise.all([
+  const [apiCameras, eventPage, apiTracks] = await Promise.all([
     get<ApiCamera[]>('/cameras?enabled=true'),
     get<EventPage>('/events?page=1&page_size=100'),
+    get<Record<string, ApiTrack[]>>('/tracks'),
   ]);
   const events = eventPage.items.map(mapEvent);
   const alerts = events
@@ -95,6 +127,9 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     cameras: apiCameras.map(mapCamera),
     events,
     alerts,
+    tracksByCamera: Object.fromEntries(
+      Object.entries(apiTracks).map(([cameraId, tracks]) => [cameraId, tracks.map(mapTrack)]),
+    ),
   };
 }
 

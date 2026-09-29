@@ -5,14 +5,15 @@ import SecuritySummary from './SecuritySummary';
 import ActiveAlerts from './ActiveAlerts';
 import RecentEvents from './RecentEvents';
 import CameraStatus from './CameraStatus';
-import { fetchDashboardData, mapAlert, mapEvent } from '../api';
-import type { Camera, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
+import { fetchDashboardData, mapAlert, mapEvent, mapTrack } from '../api';
+import type { Camera, PersonTrack, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
 const Dashboard: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
   const [events, setEvents] = useState<SecurityEvent[]>([]);
+  const [tracksByCamera, setTracksByCamera] = useState<Record<string, PersonTrack[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
@@ -27,6 +28,7 @@ const Dashboard: React.FC = () => {
         setCameras(data.cameras);
         setAlerts(data.alerts);
         setEvents(data.events);
+        setTracksByCamera(data.tracksByCamera);
         setPrimaryCameraId((current) => current ?? data.cameras[0]?.id ?? null);
       })
       .catch((requestError: unknown) => {
@@ -58,6 +60,11 @@ const Dashboard: React.FC = () => {
           type?: string;
           data?: Parameters<typeof mapEvent>[0];
         };
+        if (payload.type === 'person_tracks' && payload.data) {
+          const trackData = payload.data as unknown as { camera_id: string; tracks: Parameters<typeof mapTrack>[0][] };
+          setTracksByCamera((current) => ({ ...current, [String(trackData.camera_id)]: trackData.tracks.map(mapTrack) }));
+          return;
+        }
         if (payload.type !== 'security_event' || !payload.data) return;
         const incoming = mapEvent(payload.data);
         setEvents((current) => [
@@ -100,8 +107,10 @@ const Dashboard: React.FC = () => {
     criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
     camerasOnline: cameras.filter(c => c.status === 'enabled').length,
     totalCameras: cameras.length,
-    peopleDetected: events.filter(e => e.objectType === 'person').length
-  }), [alerts, cameras, error, events, streamConnected]);
+    // Keep a temporarily-lost track in the operator count for the configured
+    // grace period; it has not yet become a departed person/session.
+    peopleDetected: Object.values(tracksByCamera).flat().length
+  }), [alerts, cameras, error, streamConnected, tracksByCamera]);
 
   const handleSelectCamera = (cameraId: string) => {
     setPrimaryCameraId(cameraId);
@@ -122,6 +131,7 @@ const Dashboard: React.FC = () => {
             primaryCamera={primaryCamera} 
             secondaryCameras={secondaryCameras} 
             onSelectCamera={handleSelectCamera}
+            tracksByCamera={tracksByCamera}
           />
         </div>
         

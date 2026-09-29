@@ -1,0 +1,37 @@
+.detection-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+
+.person-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #2ce6a6;
+  border-radius: 2px;
+  min-width: 2px;
+  min-height: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 10px rgba(44, 230, 166, .45);
+  transition: left 110ms linear, top 110ms linear, width 110ms linear, height 110ms linear;
+}
+
+.person-box.lost { border-style: dashed; opacity: .7; }
+
+.person-box-label, .person-box-debug {
+  position: absolute;
+  top: -25px;
+  left: -2px;
+  white-space: nowrap;
+  padding: 3px 6px;
+  color: #03130e;
+  background: #2ce6a6;
+  font: 600 11px/1.1 monospace;
+}
+
+.person-box-debug {
+  top: -45px;
+  color: #d8fff2;
+  background: rgba(3, 19, 14, .88);
+}

@@ -60,11 +60,18 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-securepulse}:${POSTGRES_PASSWORD:-securepulse}@postgres:5432/${POSTGRES_DB:-securepulse}
+      FRIGATE_URL: http://frigate:5000
       GO2RTC_URL: http://frigate:1984
       MQTT_HOST: mqtt
       MQTT_PORT: 1883
       FRIGATE_MQTT_TOPIC: frigate/events
       SECURITY_ENGINE_FAILURE_MODE: ${SECURITY_ENGINE_FAILURE_MODE:-STORE_UNCLASSIFIED}
+      # The optional external engine is not part of this compose stack. Fail
+      # quickly to the documented unclassified fallback when it is absent.
+      SECURITY_ENGINE_TIMEOUT_SECONDS: ${SECURITY_ENGINE_TIMEOUT_SECONDS:-1}
+      SECURITY_ENGINE_SUPPORTS_TRACKING: ${SECURITY_ENGINE_SUPPORTS_TRACKING:-false}
+      TRACKING_LOST_TRACK_TIMEOUT_SECONDS: ${TRACKING_LOST_TRACK_TIMEOUT_SECONDS:-3}
+      TRACKING_MINIMUM_DETECTION_CONFIDENCE: ${TRACKING_MINIMUM_DETECTION_CONFIDENCE:-0.5}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
       JWT_SECRET: ${JWT_SECRET:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -80,9 +87,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks:
-      - default
-      - frigate
 
   # Simulated RTSP Stream for local offline development & testing
   rtsp-sim:
@@ -96,8 +100,3 @@ volumes:
   postgres_data:
   mosquitto_data:
   mosquitto_log:
-
-networks:
-  frigate:
-    external: true
-    name: frigate_default

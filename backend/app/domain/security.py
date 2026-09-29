@@ -18,6 +18,11 @@ class SecurityContext(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: datetime
     zone: str | None = None
+    # Anonymous, temporary tracking context. No facial or biometric data is
+    # accepted by this contract.
+    track_id: str | None = Field(default=None, min_length=1)
+    bounding_box: dict[str, float] | None = None
+    active_person_count: int | None = Field(default=None, ge=0)
 
 
 class SecurityDecision(BaseModel):

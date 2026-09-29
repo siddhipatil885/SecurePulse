@@ -34,6 +34,25 @@ def test_parser_normalizes_frigate_event() -> None:
     assert detection.metadata["zones"] == ["entrance"]
 
 
+def test_parser_accepts_end_event_when_frigate_omits_end_time() -> None:
+    """Do not leave a live track open because an upstream end is incomplete."""
+    detection = FrigateEventParser().parse(
+        {
+            "type": "end",
+            "after": {
+                "id": "abc123",
+                "camera": "front_door",
+                "label": "person",
+                "top_score": 0.94,
+                "start_time": 1790105420.0,
+            },
+        }
+    )
+
+    assert detection.metadata["lifecycle"] == "end"
+    assert detection.timestamp.tzinfo == timezone.utc
+
+
 @pytest.mark.parametrize(
     "payload",
     [

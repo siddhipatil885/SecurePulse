@@ -42,7 +42,14 @@ class FrigateEventParser:
         if not isinstance(confidence, (int, float)):
             raise FrigatePayloadError("Frigate event has no numeric top_score")
 
-        timestamp = self._parse_timestamp(event.get("start_time", event.get("timestamp")))
+        # A Frigate event's start time is stable across updates. Preserve it
+        # as the incident timestamp, but retain a separate observation time
+        # for the live tracker below.
+        timestamp = self._parse_timestamp(
+            event.get("end_time", event.get("start_time", event.get("timestamp")))
+            if lifecycle == "end"
+            else event.get("start_time", event.get("timestamp"))
+        )
         
         # Preserve bounding box as [x1, y1, x2, y2] and tracking metadata
         metadata = {
@@ -50,15 +57,22 @@ class FrigateEventParser:
             "zones": event.get("zones", []),
             "has_snapshot": bool(event.get("has_snapshot", False)),
             "has_clip": bool(event.get("has_clip", False)),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
         }
         
         # Extract bounding box if present
         if "box" in event and isinstance(event["box"], (list, tuple)) and len(event["box"]) == 4:
             metadata["bounding_box"] = list(event["box"])
+        for field in ("frame_width", "frame_height"):
+            if isinstance(event.get(field), (int, float)):
+                metadata[field] = event[field]
         
         # Extract optional tracking fields
+        event_data = event.get("data")
         if "path_data" in event:
             metadata["path_data"] = event["path_data"]
+        elif isinstance(event_data, dict) and "path_data" in event_data:
+            metadata["path_data"] = event_data["path_data"]
         if "start_time" in event:
             metadata["start_time"] = event["start_time"]
         if "end_time" in event:

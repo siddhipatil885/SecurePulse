@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     security_engine_failure_mode: Literal["STORE_UNCLASSIFIED", "REJECT"] = Field(
         default="STORE_UNCLASSIFIED", validation_alias="SECURITY_ENGINE_FAILURE_MODE"
     )
+    security_engine_supports_tracking: bool = Field(
+        default=False, validation_alias="SECURITY_ENGINE_SUPPORTS_TRACKING"
+    )
     auth_enabled: bool = Field(default=False, validation_alias="AUTH_ENABLED")
     jwt_secret: str = Field(default="", validation_alias="JWT_SECRET")
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(
@@ -64,6 +67,12 @@ class Settings(BaseSettings):
     )
     frigate_event_cooldown_seconds: float = Field(
         default=30.0, ge=0, validation_alias="FRIGATE_EVENT_COOLDOWN_SECONDS"
+    )
+    tracking_lost_track_timeout_seconds: float = Field(
+        default=3.0, gt=0, validation_alias="TRACKING_LOST_TRACK_TIMEOUT_SECONDS"
+    )
+    tracking_minimum_detection_confidence: float = Field(
+        default=0.5, ge=0, le=1, validation_alias="TRACKING_MINIMUM_DETECTION_CONFIDENCE"
     )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     frame_width: int = Field(default=1280, gt=0, validation_alias="FRAME_WIDTH")

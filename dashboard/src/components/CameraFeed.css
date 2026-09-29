@@ -97,3 +97,11 @@
 }
 .secondary .timestamp { font-size: 0.75rem; }
 
+.people-count {
+  margin-top: 7px;
+  color: #d8fff2;
+  font-size: .78rem;
+  font-weight: 600;
+  text-shadow: 1px 1px 2px rgba(0,0,0,.8);
+}
+

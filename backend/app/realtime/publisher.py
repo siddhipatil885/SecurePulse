@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class EventPublisher(Protocol):
     async def publish(self, event: SecurityEvent) -> None: ...
+    async def publish_tracks(self, camera_id: str, tracks: list[dict[str, object]]) -> None: ...
 
 
 class InMemoryEventPublisher:
@@ -41,3 +42,15 @@ class InMemoryEventPublisher:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 logger.warning("Dropped real-time event for a slow subscriber")
+
+    async def publish_tracks(self, camera_id: str, tracks: list[dict[str, object]]) -> None:
+        """Publish the current camera track set; observations are never alerts."""
+        payload: dict[str, object] = {
+            "type": "person_tracks",
+            "data": {"camera_id": camera_id, "tracks": tracks},
+        }
+        for queue in tuple(self._subscribers):
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                logger.warning("Dropped real-time track update for a slow subscriber")
