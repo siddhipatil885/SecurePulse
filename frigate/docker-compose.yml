@@ -1,0 +1,17 @@
+services:
+  frigate:
+    container_name: frigate
+    privileged: true
+    restart: unless-stopped
+    image: ghcr.io/blakeblackshear/frigate:stable
+    shm_size: "256mb"
+
+    ports:
+      - "8971:8971"
+      - "8554:8554"
+      - "8556:8555/tcp"
+      - "8556:8555/udp"
+
+    volumes:
+      - ./config:/config
+      - ./storage:/media/frigate
