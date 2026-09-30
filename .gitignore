@@ -33,3 +33,26 @@ node_modules/
 frigate/media/*
 !frigate/media/.gitkeep
 
+# ── Frigate runtime / generated data ──
+frigate/config/.exports
+frigate/config/.jwt_secret
+frigate/config/.runtime_state.json
+frigate/config/.runtime_state.json.lock
+frigate/config/.search_stats.json
+frigate/config/.vacuum
+frigate/config/*.db
+frigate/config/*.db-shm
+frigate/config/*.db-wal
+frigate/storage/*
+!frigate/storage/.gitkeep
+
+# ── Frigate generated media ──
+frigate/media/*
+!frigate/media/.gitkeep
+
+
+# ── MediaMTX generated / private files ──
+mediamtx/auto.crt
+mediamtx/auto.key
+mediamtx/mediamtx.exe
+mediamtx/mediamtx.zip

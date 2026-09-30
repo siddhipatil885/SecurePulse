@@ -1,0 +1,36 @@
+mqtt:
+  enabled: true
+  host: host.docker.internal
+  port: 1883
+  topic_prefix: frigate
+
+record:
+  enabled: true
+
+snapshots:
+  enabled: true
+
+go2rtc:
+  streams:
+    laptop_camera: rtsp://host.docker.internal:8555/cam
+  webrtc:
+    candidates:
+      - 127.0.0.1:8556
+
+cameras:
+  laptop_camera:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/laptop_camera
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+
+version: 0.18-0
