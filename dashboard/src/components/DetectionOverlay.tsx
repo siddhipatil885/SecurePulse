@@ -6,6 +6,7 @@ interface DetectionOverlayProps {
   video: HTMLVideoElement | null;
   tracks: PersonTrack[];
   debug?: boolean;
+  fitMode?: 'cover' | 'contain';
 }
 
 interface RenderedBox {
@@ -16,7 +17,7 @@ interface RenderedBox {
   height: number;
 }
 
-function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[]): RenderedBox[] {
+function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[], fitMode: 'cover' | 'contain'): RenderedBox[] {
   if (!video) return [];
   const container = video.parentElement;
   if (!container) return [];
@@ -32,7 +33,9 @@ function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[]): 
     const sourceWidth = video.videoWidth || track.frameWidth;
     const sourceHeight = video.videoHeight || track.frameHeight;
     if (!sourceWidth || !sourceHeight) return [];
-    const scale = Math.max(containerWidth / sourceWidth, containerHeight / sourceHeight);
+    const scale = fitMode === 'contain'
+      ? Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight)
+      : Math.max(containerWidth / sourceWidth, containerHeight / sourceHeight);
     const renderedWidth = sourceWidth * scale;
     const renderedHeight = sourceHeight * scale;
     const offsetX = (containerWidth - renderedWidth) / 2;
@@ -48,11 +51,11 @@ function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[]): 
   });
 }
 
-const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ video, tracks, debug = false }) => {
+const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ video, tracks, debug = false, fitMode = 'cover' }) => {
   const [boxes, setBoxes] = useState<RenderedBox[]>([]);
 
   useLayoutEffect(() => {
-    const update = () => setBoxes(calculateBoxes(video, tracks));
+    const update = () => setBoxes(calculateBoxes(video, tracks, fitMode));
     update();
     if (!video) return undefined;
     const observer = new ResizeObserver(update);
@@ -63,7 +66,7 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ video, tracks, debu
       observer.disconnect();
       video.removeEventListener('loadedmetadata', update);
     };
-  }, [video, tracks]);
+  }, [video, tracks, fitMode]);
 
   return (
     <div className="detection-overlay" aria-label={`${tracks.length} currently tracked people`}>

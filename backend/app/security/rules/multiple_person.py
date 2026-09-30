@@ -44,6 +44,9 @@ class MultiplePersonRule(SecurityRule):
             for d in context.active_detections
             if d.object_type == "person" and d.camera_id == detection.camera_id
         )
+        configured_count = detection.metadata.get("active_person_count")
+        if isinstance(configured_count, int):
+            person_count = max(person_count, configured_count)
 
         if person_count < self._config.multiple_person_threshold:
             return None

@@ -59,6 +59,8 @@ class FrigateEventParser:
             "has_clip": bool(event.get("has_clip", False)),
             "observed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if isinstance(event.get("face_visible"), bool):
+            metadata["face_visible"] = event["face_visible"]
         
         # Extract bounding box if present
         if "box" in event and isinstance(event["box"], (list, tuple)) and len(event["box"]) == 4:
@@ -73,6 +75,8 @@ class FrigateEventParser:
             metadata["path_data"] = event["path_data"]
         elif isinstance(event_data, dict) and "path_data" in event_data:
             metadata["path_data"] = event_data["path_data"]
+        if isinstance(event_data, dict) and isinstance(event_data.get("face_visible"), bool):
+            metadata["face_visible"] = event_data["face_visible"]
         if "start_time" in event:
             metadata["start_time"] = event["start_time"]
         if "end_time" in event:
@@ -158,7 +162,13 @@ class FrigateClient:
         self.settings = settings or get_settings()
         self.on_detection = on_detection
         self.parser = parser or FrigateEventParser()
-        self.client = mqtt.Client(client_id=self.settings.mqtt_client_id)
+        client_kwargs: dict[str, Any] = {"client_id": self.settings.mqtt_client_id}
+        # Paho MQTT 2.x deprecates callback API v1.  Keep the fallback for
+        # the project's supported 1.x releases, which do not expose this
+        # enum yet.
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            client_kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION2
+        self.client = mqtt.Client(**client_kwargs)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
@@ -195,20 +205,44 @@ class FrigateClient:
         self.client.loop_stop()
         self._connected = False
 
-    def _on_connect(self, client: mqtt.Client, userdata: Any, flags: dict[str, Any], rc: int) -> None:
-        if rc == 0:
+    def _on_connect(
+        self,
+        client: mqtt.Client,
+        userdata: Any,
+        flags: dict[str, Any],
+        reason_code: Any,
+        properties: Any = None,
+    ) -> None:
+        if reason_code == 0:
             self._connected = True
             client.subscribe(self.settings.frigate_mqtt_topic, qos=0)
             logger.info("Connected to Frigate MQTT")
         else:
-            logger.warning("Frigate MQTT connection rejected", extra={"result_code": rc})
+            logger.warning(
+                "Frigate MQTT connection rejected",
+                extra={"result_code": str(reason_code)},
+            )
 
     def _on_disconnect(
-        self, client: mqtt.Client, userdata: Any, rc: int
+        self,
+        client: mqtt.Client,
+        userdata: Any,
+        disconnect_flags_or_reason_code: Any,
+        reason_code: Any = None,
+        properties: Any = None,
     ) -> None:
         self._connected = False
-        if rc != 0:
-            logger.warning("Disconnected from Frigate MQTT", extra={"result_code": rc})
+        # API v1 supplies only ``rc``; API v2 supplies flags and reason code.
+        result_code = (
+            disconnect_flags_or_reason_code
+            if reason_code is None
+            else reason_code
+        )
+        if result_code != 0:
+            logger.warning(
+                "Disconnected from Frigate MQTT",
+                extra={"result_code": str(result_code)},
+            )
 
     def _on_message(self, client: mqtt.Client, userdata: Any, message: MQTTMessage) -> None:
         try:

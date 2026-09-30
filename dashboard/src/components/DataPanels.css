@@ -97,6 +97,19 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.event-evidence {
+  position: relative;
+  display: block;
+  width: 76px;
+  height: 48px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.event-evidence img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.event-evidence-box { position: absolute; border: 1px solid #2ce6a6; pointer-events: none; }
+
 .event-item:last-child {
   border-bottom: none;
   padding-bottom: 0;

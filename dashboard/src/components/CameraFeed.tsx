@@ -12,6 +12,7 @@ interface CameraFeedProps {
 }
 
 const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) => {
+  const fitMode: 'cover' | 'contain' = import.meta.env.VITE_VIDEO_OBJECT_FIT === 'contain' ? 'contain' : 'cover';
   const [time, setTime] = useState<Date>(new Date());
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'unavailable'>('connecting');
@@ -93,7 +94,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
         {camera.status === 'enabled' ? (
           <video
             ref={setVideoRef}
-            className="camera-snapshot"
+            className={`camera-snapshot ${fitMode}`}
             autoPlay
             playsInline
             muted
@@ -109,6 +110,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
           video={videoElement}
           tracks={tracks}
           debug={import.meta.env.VITE_DEBUG_DETECTIONS === 'true'}
+          fitMode={fitMode}
         />
       </div>
 

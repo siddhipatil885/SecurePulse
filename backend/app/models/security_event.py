@@ -12,7 +12,7 @@ from app.database.base import Base
 class SecurityEvent(Base):
     __tablename__ = "security_events"
     __table_args__ = (
-        UniqueConstraint("frigate_event_id", name="uq_security_events_frigate_event_id"),
+        UniqueConstraint("incident_key", name="uq_security_events_incident_key"),
         Index("ix_security_events_camera_timestamp", "camera_id", "timestamp"),
         Index("ix_security_events_severity", "severity"),
     )
@@ -28,6 +28,7 @@ class SecurityEvent(Base):
     score: Mapped[int | None] = mapped_column(Integer)
     zone: Mapped[str | None] = mapped_column(String(255))
     frigate_event_id: Mapped[str | None] = mapped_column(String(255))
+    incident_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(1000))
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSON, default=dict, nullable=False
@@ -38,3 +39,4 @@ class SecurityEvent(Base):
 
     camera = relationship("Camera", back_populates="security_events")
     evidence = relationship("Evidence", back_populates="security_event")
+    alerts = relationship("Alert", back_populates="security_event")

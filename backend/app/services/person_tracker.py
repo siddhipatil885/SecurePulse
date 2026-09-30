@@ -106,6 +106,7 @@ class PersonTracker:
                 confidence=detection.confidence,
                 frame_width=frame_width,
                 frame_height=frame_height,
+                face_visible=self._face_visible(detection),
             )
             self._tracks[key] = track
             self._log("TRACK_CREATED", track)
@@ -117,6 +118,7 @@ class PersonTracker:
         track.confidence = detection.confidence
         track.frame_width = frame_width
         track.frame_height = frame_height
+        track.face_visible = self._face_visible(detection)
         track.state = "ACTIVE"
         self._log("TRACK_REACQUIRED" if was_lost else "TRACK_UPDATED", track)
         return track
@@ -167,6 +169,11 @@ class PersonTracker:
     @staticmethod
     def _positive_int(value: object, fallback: int) -> int:
         return int(value) if isinstance(value, (int, float)) and value > 0 else fallback
+
+    @staticmethod
+    def _face_visible(detection: DetectionEvent) -> bool | None:
+        value = detection.metadata.get("face_visible")
+        return value if isinstance(value, bool) else None
 
     @staticmethod
     def _observation_time(detection: DetectionEvent) -> datetime:

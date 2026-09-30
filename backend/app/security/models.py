@@ -165,6 +165,7 @@ class DetectionEvent(BaseModel):
     source_event_id: str = Field(min_length=1)
     camera_id: str = Field(min_length=1)
     object_id: str = Field(min_length=1)
+    track_id: str | None = Field(default=None, min_length=1)
     object_type: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: datetime
@@ -216,6 +217,7 @@ class SecurityEventCandidate(BaseModel):
     camera_id: str
     source_event_id: str
     object_id: str
+    track_id: str | None = Field(default=None, min_length=1)
     severity: Severity
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: datetime

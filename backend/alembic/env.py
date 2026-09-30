@@ -7,7 +7,10 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
 from app.database.base import Base
-from app.models import Camera, Evidence, SecurityEvent
+# Import every mapped model before reading Base.metadata.  Alembic needs these
+# imports for autogeneration and schema consistency checks, even when a
+# migration explicitly creates the corresponding tables.
+from app.models import Alert, Camera, Evidence, SecurityEvent, Track
 
 config = context.config
 if config.config_file_name is not None:

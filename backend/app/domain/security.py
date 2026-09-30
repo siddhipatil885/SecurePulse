@@ -22,6 +22,8 @@ class SecurityContext(BaseModel):
     # accepted by this contract.
     track_id: str | None = Field(default=None, min_length=1)
     bounding_box: dict[str, float] | None = None
+    frame_width: int | None = Field(default=None, gt=0)
+    frame_height: int | None = Field(default=None, gt=0)
     active_person_count: int | None = Field(default=None, ge=0)
 
 

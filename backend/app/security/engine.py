@@ -180,6 +180,7 @@ class SecurityEngine:
                     camera_id=result.camera_id,
                     source_event_id=detection.source_event_id,
                     object_id=result.object_id,
+                    track_id=detection.track_id,
                     severity=severity,
                     confidence=detection.confidence,
                     timestamp=now,

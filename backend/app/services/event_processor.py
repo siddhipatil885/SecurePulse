@@ -1,18 +1,23 @@
 """Central Phase 4 detection-to-event workflow."""
 
 import logging
+import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.domain.events import DetectionEvent
 from app.domain.security import SecurityContext, SecurityDecision
 from app.integrations.security_engine import SecurityEngine, SecurityEngineError
 from app.models.camera import Camera
 from app.models.security_event import SecurityEvent
+from app.models.alert import Alert
+from app.models.track import Track
+from app.models.evidence import Evidence
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.realtime.publisher import EventPublisher
@@ -92,6 +97,8 @@ class EventProcessor:
         track: TrackedPerson | None = None
         if self.person_tracker is not None:
             track = self.person_tracker.observe(detection, str(camera.id))
+            if track is not None:
+                await self._persist_track(track, camera.id)
             await self._publish_tracks(str(camera.id))
 
         existing = await self.event_repository.get_by_frigate_event_id(
@@ -103,6 +110,25 @@ class EventProcessor:
         
         # If event already exists, it's an update or end
         if existing is not None:
+            if lifecycle == "update" and self.security_engine is not None:
+                decision = await self._get_security_decision(detection, camera, track)
+                if decision is not None and decision.event_type != "DETECTION":
+                    incident = self._build_event(detection, camera, decision, track)
+                    incident.incident_key = self._incident_key(detection, decision, track)
+                    await self.event_repository.create(incident)
+                    if incident.severity in {"HIGH", "CRITICAL"}:
+                        await self._add(
+                            Alert(
+                                camera_id=incident.camera_id,
+                                security_event_id=incident.id,
+                                severity=incident.severity,
+                                status="ACTIVE",
+                            )
+                        )
+                    await self.session.commit()
+                    if self.publisher is not None:
+                        await self.publisher.publish(incident)
+                    return EventProcessResult(event=incident, duplicate=False)
             if lifecycle in {"update", "end"}:
                 existing.object_type = detection.object_type
                 existing.confidence = detection.confidence
@@ -154,8 +180,36 @@ class EventProcessor:
         # NEW event - create it
         decision = await self._get_security_decision(detection, camera, track)
         event = self._build_event(detection, camera, decision, track)
+        if decision is not None:
+            event.incident_key = self._incident_key(detection, decision, track)
+        snapshot_url = None
+        if detection.metadata.get("has_snapshot"):
+            snapshot_url = f"/api/v1/frigate/cameras/{camera.frigate_camera_name}/snapshot"
+            event.event_metadata = {**event.event_metadata, "snapshot_url": snapshot_url}
         try:
             await self.event_repository.create(event)
+            if detection.metadata.get("has_snapshot"):
+                await self._add(
+                    Evidence(
+                        event_id=event.id,
+                        type="SNAPSHOT",
+                        file_path=snapshot_url or "",
+                        timestamp=detection.timestamp,
+                        evidence_metadata={
+                            "bounding_box": track.bbox if track else None,
+                            "face_visible": track.face_visible if track else None,
+                        },
+                    )
+                )
+            if event.severity in {"HIGH", "CRITICAL"}:
+                await self._add(
+                    Alert(
+                        camera_id=event.camera_id,
+                        security_event_id=event.id,
+                        severity=event.severity,
+                        status="ACTIVE",
+                    )
+                )
             await self.session.commit()
         except IntegrityError:
             await self.session.rollback()
@@ -184,6 +238,34 @@ class EventProcessor:
             },
         )
         return EventProcessResult(event=event, duplicate=False)
+
+    async def _persist_track(self, track: TrackedPerson, camera_id: int) -> None:
+        """Upsert the anonymous live projection without storing biometric data."""
+        statement = select(Track).where(Track.track_id == track.track_id)
+        persisted = await self.session.scalar(statement)
+        values = {
+            "camera_id": camera_id,
+            "source_event_id": track.source_event_id,
+            "first_seen": track.first_seen,
+            "last_seen": track.last_seen,
+            "state": track.state,
+            "confidence": track.confidence,
+            "bounding_box": track.bbox,
+            "frame_width": track.frame_width,
+            "frame_height": track.frame_height,
+            "face_visible": track.face_visible,
+        }
+        if persisted is None:
+            await self._add(Track(track_id=track.track_id, **values))
+        else:
+            for key, value in values.items():
+                setattr(persisted, key, value)
+
+    async def _add(self, entity: object) -> None:
+        """Support SQLAlchemy sessions and lightweight async test doubles."""
+        result = self.session.add(entity)  # type: ignore[attr-defined]
+        if inspect.isawaitable(result):
+            await result
 
     async def publish_expired_tracks(self, camera_ids: set[str]) -> None:
         """Emit camera snapshots after the track-expiry housekeeping task."""
@@ -239,6 +321,8 @@ class EventProcessor:
                 context.update(
                     track_id=track.track_id if track else None,
                     bounding_box=track.bbox if track else None,
+                    frame_width=track.frame_width if track else None,
+                    frame_height=track.frame_height if track else None,
                     active_person_count=(
                         len(self.person_tracker.tracks_for_camera(str(camera.id)))
                         if self.person_tracker else None
@@ -295,6 +379,16 @@ class EventProcessor:
             "bounding_box_normalized": track.bbox,
             "face_visible": track.face_visible,
         }
+
+    @staticmethod
+    def _incident_key(
+        detection: DetectionEvent,
+        decision: SecurityDecision,
+        track: TrackedPerson | None,
+    ) -> str:
+        anonymous_track = track.track_id if track else detection.source_event_id
+        observed_at = detection.metadata.get("observed_at", detection.timestamp.isoformat())
+        return f"{anonymous_track}:{decision.event_type}:{observed_at}"
 
     @staticmethod
     def _zone_from_metadata(detection: DetectionEvent) -> str | None:

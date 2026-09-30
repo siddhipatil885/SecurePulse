@@ -22,6 +22,7 @@ from app.database.database import dispose_database, get_session_factory
 from app.domain.events import DetectionEvent
 from app.integrations.frigate import FrigateClient
 from app.integrations.security_engine import HttpSecurityEngine
+from app.integrations.local_security_engine import LocalSecurityEngine
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.services.event_processor import EventProcessor
@@ -49,7 +50,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         event_publisher = get_event_publisher()
         person_tracker = get_person_tracker()
         session_factory = get_session_factory()
-        security_engine = HttpSecurityEngine(settings)
+        using_local_security_engine = settings.use_local_security_engine
+        security_engine = (
+            LocalSecurityEngine()
+            if using_local_security_engine
+            else HttpSecurityEngine(settings)
+        )
         
         async def on_detection_async(detection: DetectionEvent) -> None:
             """Async wrapper for detection processing."""
@@ -66,7 +72,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                         publisher=event_publisher,
                         event_cooldown_seconds=settings.frigate_event_cooldown_seconds,
                         person_tracker=person_tracker,
-                        security_engine_supports_tracking=settings.security_engine_supports_tracking,
+                        # The in-process adapter owns both sides of the contract, so it
+                        # always accepts the anonymous tracking extension.  Remote
+                        # engines remain opt-in to preserve their existing contract.
+                        security_engine_supports_tracking=(
+                            using_local_security_engine
+                            or settings.security_engine_supports_tracking
+                        ),
                     )
                     result = await processor.process(detection)
                     logger.info(

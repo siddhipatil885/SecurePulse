@@ -9,7 +9,13 @@ from app.database.database import _async_database_url
 def test_models_are_registered_with_shared_metadata() -> None:
     import app.models  # noqa: F401
 
-    assert set(Base.metadata.tables) == {"cameras", "security_events", "evidence"}
+    assert set(Base.metadata.tables) == {
+        "alerts",
+        "cameras",
+        "evidence",
+        "security_events",
+        "tracks",
+    }
 
 
 def test_database_url_normalizes_postgresql_scheme() -> None:

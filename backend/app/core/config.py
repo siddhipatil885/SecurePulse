@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     security_engine_supports_tracking: bool = Field(
         default=False, validation_alias="SECURITY_ENGINE_SUPPORTS_TRACKING"
     )
+    use_local_security_engine: bool = Field(
+        default=False, validation_alias="USE_LOCAL_SECURITY_ENGINE"
+    )
     auth_enabled: bool = Field(default=False, validation_alias="AUTH_ENABLED")
     jwt_secret: str = Field(default="", validation_alias="JWT_SECRET")
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(

@@ -54,13 +54,19 @@ into a temporary `person_track_<frigate-id>` session.
 - Frigate `new`/`update` messages preserve one track; `end` puts it into a
   configurable grace period (`TRACKING_LOST_TRACK_TIMEOUT_SECONDS`, default
   3 seconds) before it is removed.
-- Security-event database idempotency is keyed by the Frigate source ID. A
-  camera-wide cooldown is deliberately not used to suppress a second person.
+- The base detection record is keyed by the Frigate source ID, while derived
+  security incidents use a separate track/event/timestamp key. A camera-wide
+  cooldown is deliberately not used to suppress a second person.
 
 Set `SECURITY_ENGINE_SUPPORTS_TRACKING=true` only after the separately deployed
 security engine accepts the optional `track_id`, normalized `bounding_box`, and
 `active_person_count` fields. The default preserves the existing engine's JSON
 contract; tracking and the dashboard work independently of that opt-in.
+
+Set `USE_LOCAL_SECURITY_ENGINE=true` to use the built-in rule adapter instead
+of the separate HTTP service. It always receives the anonymous tracking
+extension and converts normalized UI boxes back to source-frame pixels before
+evaluating zones and tripwires.
 
 `face_visible` is currently always `null` because Frigate does not emit that
 signal. It is reserved only as an evidence-quality field; it must never hold a
