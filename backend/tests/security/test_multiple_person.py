@@ -95,3 +95,23 @@ class TestMultiplePersonRule:
 
         assert result is not None
         assert result.metadata["person_count"] == 3
+
+    def test_mixed_cameras_only_counts_same_camera(self, rule: MultiplePersonRule) -> None:
+        # Create 2 persons on cam1
+        persons_cam1 = [
+            make_detection(object_id=f"person-{i}", camera_id="cam1", source_event_id=f"c1-{i}")
+            for i in range(2)
+        ]
+        # Create 2 persons on cam2
+        persons_cam2 = [
+            make_detection(object_id=f"person-{i}", camera_id="cam2", source_event_id=f"c2-{i}")
+            for i in range(2, 4)
+        ]
+        all_detections = persons_cam1 + persons_cam2
+
+        # Evaluate for a detection on cam1
+        ctx = SecurityContext(
+            detection=persons_cam1[0], active_detections=all_detections
+        )
+        # Should not trigger because only 2 persons are on cam1 (threshold is 3)
+        assert rule.evaluate(ctx) is None
