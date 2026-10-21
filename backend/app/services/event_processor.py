@@ -18,6 +18,7 @@ from app.models.security_event import SecurityEvent
 from app.models.alert import Alert
 from app.models.track import Track
 from app.models.evidence import Evidence
+from app.models.operations import IncidentStatusHistory, NotificationOutbox, SourceEventReceipt
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.realtime.publisher import EventPublisher
@@ -83,6 +84,24 @@ class EventProcessor:
 
     async def process(self, detection: DetectionEvent) -> EventProcessResult:
         """Process one detection with an idempotent database transaction."""
+        try:
+            return await self._process(detection)
+        except IntegrityError:
+            await self.session.rollback()
+            receipt = await self.event_repository.get_receipt(
+                source_system=detection.source,
+                source_event_id=detection.source_event_id,
+                event_phase=str(detection.metadata.get("lifecycle") or "new"),
+                revision=str(detection.metadata.get("revision", "0")),
+            )
+            if receipt is not None and receipt.security_event is not None:
+                return EventProcessResult(event=receipt.security_event, duplicate=True)
+            raise
+        except Exception:
+            await self.session.rollback()
+            raise
+
+    async def _process(self, detection: DetectionEvent) -> EventProcessResult:
 
         self._validate_detection(detection)
         camera = await self.camera_repository.get_by_frigate_name(detection.camera)
@@ -90,6 +109,35 @@ class EventProcessor:
             raise CameraNotFoundError(f"Camera '{detection.camera}' does not exist")
         if not camera.enabled:
             raise CameraDisabledError(f"Camera '{detection.camera}' is disabled")
+
+        lifecycle = str(detection.metadata.get("lifecycle") or "new")
+        raw_revision = detection.metadata.get("revision", "0")
+        revision = str(raw_revision) if isinstance(raw_revision, (str, int)) and not isinstance(raw_revision, bool) else "0"
+        prior_receipt = await self.event_repository.get_receipt(
+            source_system=detection.source,
+            source_event_id=detection.source_event_id,
+            event_phase=lifecycle,
+            revision=revision,
+        )
+        if prior_receipt is not None:
+            prior_event = getattr(prior_receipt, "security_event", None)
+            if prior_event is None:
+                prior_event = await self.event_repository.get_by_frigate_event_id(
+                    detection.source_event_id
+                )
+            if prior_event is not None:
+                return EventProcessResult(event=prior_event, duplicate=True)
+
+        receipt = SourceEventReceipt(
+            property_id=camera.property_id,
+            camera_id=camera.id,
+            source_system=detection.source,
+            source_event_id=detection.source_event_id,
+            event_phase=lifecycle,
+            revision=revision,
+            observed_at=detection.timestamp,
+            payload={"metadata": detection.metadata, "object_type": detection.object_type},
+        )
 
         # Frigate's event ID is its native object-track identifier. Project
         # every lifecycle update into a live anonymous track before deciding
@@ -99,14 +147,11 @@ class EventProcessor:
             track = self.person_tracker.observe(detection, str(camera.id))
             if track is not None:
                 await self._persist_track(track, camera.id)
-            await self._publish_tracks(str(camera.id))
+            await self._publish_tracks(str(camera.id), camera.property_id)
 
         existing = await self.event_repository.get_by_frigate_event_id(
             detection.source_event_id
         )
-        
-        # Handle lifecycle events: new, update, end
-        lifecycle = detection.metadata.get("lifecycle")
         
         # If event already exists, it's an update or end
         if existing is not None:
@@ -116,6 +161,9 @@ class EventProcessor:
                     incident = self._build_event(detection, camera, decision, track)
                     incident.incident_key = self._incident_key(detection, decision, track)
                     await self.event_repository.create(incident)
+                    receipt.security_event = incident
+                    await self.event_repository.create_receipt(receipt)
+                    await self._add_initial_incident_records(incident, detection, lifecycle, revision)
                     if incident.severity in {"HIGH", "CRITICAL"}:
                         await self._add(
                             Alert(
@@ -127,9 +175,13 @@ class EventProcessor:
                         )
                     await self.session.commit()
                     if self.publisher is not None:
-                        await self.publisher.publish(incident)
+                        try:
+                            await self.publisher.publish(incident)
+                        except Exception:
+                            logger.exception("Failed to publish committed security event")
                     return EventProcessResult(event=incident, duplicate=False)
             if lifecycle in {"update", "end"}:
+                previous_status = existing.status
                 existing.object_type = detection.object_type
                 existing.confidence = detection.confidence
                 existing.event_metadata = {
@@ -147,6 +199,20 @@ class EventProcessor:
                     if end_time is not None:
                         existing.timestamp = end_time
 
+                receipt.security_event = existing
+                await self.event_repository.create_receipt(receipt)
+                if existing.status != previous_status:
+                    await self._add(
+                        IncidentStatusHistory(
+                            security_event_id=existing.id,
+                            previous_status=previous_status,
+                            new_status=existing.status,
+                            actor_subject="system:ingestion",
+                            reason=f"Source lifecycle phase {lifecycle}",
+                            correlation_id=self._correlation_id(detection, lifecycle, revision),
+                        )
+                    )
+
                 try:
                     await self.session.commit()
                     logger.info(
@@ -157,6 +223,9 @@ class EventProcessor:
                             "lifecycle": lifecycle,
                         },
                     )
+                except IntegrityError:
+                    # The outer boundary resolves the exact winning receipt.
+                    raise
                 except Exception:
                     await self.session.rollback()
                     raise
@@ -167,6 +236,9 @@ class EventProcessor:
                     except Exception:
                         logger.exception("Failed to publish updated security event")
             else:
+                receipt.security_event = existing
+                await self.event_repository.create_receipt(receipt)
+                await self.session.commit()
                 logger.debug(
                     "EVENT_DEDUPLICATED",
                     extra={
@@ -188,6 +260,9 @@ class EventProcessor:
             event.event_metadata = {**event.event_metadata, "snapshot_url": snapshot_url}
         try:
             await self.event_repository.create(event)
+            receipt.security_event = event
+            await self.event_repository.create_receipt(receipt)
+            await self._add_initial_incident_records(event, detection, lifecycle, revision)
             if detection.metadata.get("has_snapshot"):
                 await self._add(
                     Evidence(
@@ -212,12 +287,7 @@ class EventProcessor:
                 )
             await self.session.commit()
         except IntegrityError:
-            await self.session.rollback()
-            existing = await self.event_repository.get_by_frigate_event_id(
-                detection.source_event_id
-            )
-            if existing is not None:
-                return EventProcessResult(event=existing, duplicate=True)
+            # Do not hide unrelated constraint failures as successful replays.
             raise
         except Exception:
             await self.session.rollback()
@@ -267,17 +337,56 @@ class EventProcessor:
         if inspect.isawaitable(result):
             await result
 
+    async def _add_initial_incident_records(
+        self,
+        event: SecurityEvent,
+        detection: DetectionEvent,
+        lifecycle: str,
+        revision: str,
+    ) -> None:
+        correlation_id = self._correlation_id(detection, lifecycle, revision)
+        await self._add(
+            IncidentStatusHistory(
+                security_event_id=event.id,
+                previous_status=None,
+                new_status=event.status,
+                actor_subject="system:ingestion",
+                reason=event.reason or "Detection ingested",
+                correlation_id=correlation_id,
+            )
+        )
+        if event.status == "OPEN":
+            await self._add(
+                NotificationOutbox(
+                    property_id=event.property_id,
+                    security_event_id=event.id,
+                    kind="INCIDENT_OPENED",
+                    dedupe_key=f"incident:{event.incident_key or detection.source_event_id}:opened",
+                    status="PENDING",
+                    payload={
+                        "camera_id": event.camera_id,
+                        "severity": event.severity,
+                        "event_type": event.event_type,
+                    },
+                )
+            )
+
+    @staticmethod
+    def _correlation_id(detection: DetectionEvent, lifecycle: str, revision: str) -> str:
+        return f"{detection.source}:{detection.source_event_id}:{lifecycle}:{revision}"
+
     async def publish_expired_tracks(self, camera_ids: set[str]) -> None:
         """Emit camera snapshots after the track-expiry housekeeping task."""
         for camera_id in camera_ids:
             await self._publish_tracks(camera_id)
 
-    async def _publish_tracks(self, camera_id: str) -> None:
+    async def _publish_tracks(self, camera_id: str, property_id: int | None = None) -> None:
         if self.person_tracker is None or self.publisher is None:
             return
         await self.publisher.publish_tracks(
             camera_id,
             self.person_tracker.tracks_for_camera(camera_id),
+            property_id,
         )
 
     @staticmethod
@@ -355,6 +464,7 @@ class EventProcessor:
         zones = detection.metadata.get("zones")
         zone = zones[0] if isinstance(zones, list) and zones and isinstance(zones[0], str) else None
         return SecurityEvent(
+            property_id=camera.property_id,
             camera_id=camera.id,
             event_type=decision.event_type if decision else "DETECTION",
             object_type=detection.object_type,

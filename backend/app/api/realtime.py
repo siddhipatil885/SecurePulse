@@ -14,13 +14,13 @@ router = APIRouter(prefix="/events", tags=["realtime"])
 @router.websocket("/stream")
 async def event_stream(
     websocket: WebSocket,
-    _: Principal = Depends(get_websocket_principal),
+    principal: Principal = Depends(get_websocket_principal),
 ) -> None:
     """Stream committed security events to a connected dashboard client."""
 
     await websocket.accept()
     publisher = get_event_publisher()
-    queue = await publisher.subscribe()
+    queue = await publisher.subscribe(principal.property_ids)
     try:
         while True:
             await websocket.send_json(await queue.get())

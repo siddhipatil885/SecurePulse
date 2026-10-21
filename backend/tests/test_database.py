@@ -11,10 +11,24 @@ def test_models_are_registered_with_shared_metadata() -> None:
 
     assert set(Base.metadata.tables) == {
         "alerts",
+        "assignment_events",
+        "assignments",
+        "audit_records",
+        "camera_health_observations",
         "cameras",
         "evidence",
+        "incident_status_history",
+        "marshal_availability",
+        "marshal_profiles",
+        "notification_attempts",
+        "notification_outbox",
+        "properties",
+        "property_memberships",
         "security_events",
+        "source_event_receipts",
         "tracks",
+        "users",
+        "zones",
     }
 
 
@@ -23,6 +37,15 @@ def test_database_url_normalizes_postgresql_scheme() -> None:
         _async_database_url("postgresql://user:password@localhost/db")
         == "postgresql+asyncpg://user:password@localhost/db"
     )
+
+
+def test_database_url_translates_neon_libpq_options_for_asyncpg() -> None:
+    normalized = _async_database_url(
+        "postgresql://user:password@example.neon.tech/db?sslmode=require&channel_binding=require"
+    )
+
+    assert normalized == "postgresql+asyncpg://user:password@example.neon.tech/db?ssl=require"
+    assert "channel_binding" not in normalized
 
 
 @pytest.mark.parametrize("database_url", ["", "mysql://localhost/db"])

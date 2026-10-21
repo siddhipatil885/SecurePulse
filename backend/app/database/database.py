@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from functools import lru_cache
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -22,11 +23,18 @@ class DatabaseNotConfiguredError(RuntimeError):
 def _async_database_url(database_url: str) -> str:
     if not database_url:
         raise DatabaseNotConfiguredError("DATABASE_URL is not configured")
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url
-    if database_url.startswith("postgresql://"):
-        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    raise ValueError("DATABASE_URL must use the PostgreSQL scheme")
+    url = make_url(database_url)
+    if url.drivername not in {"postgresql", "postgresql+asyncpg"}:
+        raise ValueError("DATABASE_URL must use the PostgreSQL scheme")
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    # libpq/psycopg supports channel_binding, while asyncpg currently does not.
+    query.pop("channel_binding", None)
+    if sslmode in {"require", "verify-ca", "verify-full"}:
+        query["ssl"] = "require"
+    return url.set(drivername="postgresql+asyncpg", query=query).render_as_string(
+        hide_password=False
+    )
 
 
 @lru_cache
@@ -67,7 +75,7 @@ async def check_database_connection() -> bool:
         async with get_engine().connect() as connection:
             await connection.execute(text("SELECT 1"))
         return True
-    except (DatabaseNotConfiguredError, SQLAlchemyError, OSError, ValueError):
+    except (DatabaseNotConfiguredError, SQLAlchemyError, OSError, TypeError, ValueError):
         return False
 
 

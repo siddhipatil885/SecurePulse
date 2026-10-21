@@ -14,6 +14,9 @@ from app.api.events import router as events_router
 from app.api.frigate import router as frigate_router
 from app.api.realtime import router as realtime_router
 from app.api.tracks import router as tracks_router
+from app.api.incidents import router as incidents_router
+from app.api.properties import router as properties_router
+from app.api.evidence import router as evidence_router
 from app.core.config import get_settings
 from app.core.dependencies import get_event_publisher, get_person_tracker
 from app.core.exceptions import register_exception_handlers
@@ -151,12 +154,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5500",
-            "http://127.0.0.1:5500",
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],
+        allow_origins=settings.parsed_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -167,6 +165,9 @@ def create_app() -> FastAPI:
     app.include_router(frigate_router, prefix="/api/v1")
     app.include_router(realtime_router, prefix="/api/v1")
     app.include_router(tracks_router, prefix="/api/v1")
+    app.include_router(incidents_router, prefix="/api/v1")
+    app.include_router(properties_router, prefix="/api/v1")
+    app.include_router(evidence_router, prefix="/api/v1")
     register_exception_handlers(app)
     return app
 

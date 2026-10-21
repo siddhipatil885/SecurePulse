@@ -3,24 +3,25 @@
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.core.auth import require_scope
+from app.core.auth import Principal, require_scope
 from app.core.config import get_settings
 from app.core.dependencies import get_camera_service
 from app.services.camera_service import CameraService
 
-router = APIRouter(
-    prefix="/frigate",
-    tags=["frigate"],
-    dependencies=[Depends(require_scope("read"))],
-)
+router = APIRouter(prefix="/frigate", tags=["frigate"])
 
 _frigate_token: str | None = None
 
 
 @router.get("/cameras/{camera_name}/snapshot", summary="Get the latest Frigate snapshot")
-async def latest_snapshot(camera_name: str) -> Response:
+async def latest_snapshot(
+    camera_name: str,
+    principal: Principal = Depends(require_scope("read")),
+    service: CameraService = Depends(get_camera_service),
+) -> Response:
     """Return the latest JPEG without exposing Frigate directly to the browser."""
 
+    camera = await service.get_by_frigate_name(camera_name, principal.property_ids)
     settings = get_settings()
     base_url = settings.frigate_url.rstrip("/")
     try:
@@ -41,7 +42,7 @@ async def latest_snapshot(camera_name: str) -> Response:
                 login.raise_for_status()
                 _frigate_token = client.cookies.get("frigate_token")
 
-            url = f"{base_url}/api/{camera_name}/latest.jpg"
+            url = f"{base_url}/api/{camera.frigate_camera_name}/latest.jpg"
             response = await client.get(url)
             if response.status_code == 401 and settings.frigate_username and settings.frigate_password:
                 _frigate_token = None
@@ -74,10 +75,11 @@ async def latest_snapshot(camera_name: str) -> Response:
 async def negotiate_webrtc(
     camera_id: int,
     request: Request,
+    principal: Principal = Depends(require_scope("read")),
     service: CameraService = Depends(get_camera_service),
 ) -> Response:
     """Proxy SDP negotiation to Frigate after validating camera access."""
-    camera = await service.get(camera_id)
+    camera = await service.get(camera_id, property_ids=principal.property_ids)
     if not camera.enabled:
         raise HTTPException(status_code=409, detail="Camera is disabled")
 

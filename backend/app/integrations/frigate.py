@@ -1,6 +1,7 @@
 """Frigate MQTT adapter and payload parser."""
 
 import json
+import hashlib
 import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -54,6 +55,9 @@ class FrigateEventParser:
         # Preserve bounding box as [x1, y1, x2, y2] and tracking metadata
         metadata = {
             "lifecycle": lifecycle,
+            "revision": hashlib.sha256(
+                json.dumps(event, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest(),
             "zones": event.get("zones", []),
             "has_snapshot": bool(event.get("has_snapshot", False)),
             "has_clip": bool(event.get("has_clip", False)),

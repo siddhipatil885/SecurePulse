@@ -10,6 +10,7 @@ class EventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: int
+    property_id: int
     camera_id: int
     event_type: str
     object_type: str

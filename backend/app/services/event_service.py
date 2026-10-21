@@ -13,8 +13,10 @@ class EventService:
     def __init__(self, repository: EventRepository) -> None:
         self.repository = repository
 
-    async def get(self, event_id: int) -> SecurityEvent:
-        event = await self.repository.get_by_id(event_id)
+    async def get(
+        self, event_id: int, property_ids: frozenset[int] | None = None
+    ) -> SecurityEvent:
+        event = await self.repository.get_by_id(event_id, property_ids=property_ids)
         if event is None:
             raise ApplicationError(
                 "EVENT_NOT_FOUND", "The requested event does not exist.", 404
@@ -31,6 +33,7 @@ class EventService:
         end_time: datetime | None = None,
         page: int = 1,
         page_size: int = 50,
+        property_ids: frozenset[int] | None = None,
     ) -> tuple[list[SecurityEvent], int]:
         if start_time and end_time and start_time > end_time:
             raise ApplicationError(
@@ -42,6 +45,7 @@ class EventService:
             "severity": severity,
             "start_time": start_time,
             "end_time": end_time,
+            "property_ids": property_ids,
         }
         total = await self.repository.count(**filters)
         events = await self.repository.list(

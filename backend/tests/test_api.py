@@ -14,10 +14,14 @@ from app.models.security_event import SecurityEvent
 
 
 class FakeCameraService:
-    async def list(self, enabled: bool | None = None) -> list[Camera]:
+    async def list(
+        self, enabled: bool | None = None, property_ids: frozenset[int] | None = None,
+        limit: int | None = None, offset: int = 0,
+    ) -> list[Camera]:
         return [
             Camera(
                 id=1,
+                property_id=1,
                 name="Front Door",
                 frigate_camera_name="front_door",
                 location="Main Gate",
@@ -25,7 +29,9 @@ class FakeCameraService:
             )
         ]
 
-    async def get(self, camera_id: int) -> Camera:
+    async def get(
+        self, camera_id: int, property_ids: frozenset[int] | None = None
+    ) -> Camera:
         if camera_id != 1:
             from app.core.exceptions import ApplicationError
 
@@ -39,6 +45,7 @@ class FakeEventService:
         return [
             SecurityEvent(
                 id=42,
+                property_id=1,
                 camera_id=1,
                 event_type="PERSON_DETECTED",
                 object_type="person",
@@ -54,7 +61,9 @@ class FakeEventService:
             )
         ], 1
 
-    async def get(self, event_id: int) -> SecurityEvent:
+    async def get(
+        self, event_id: int, property_ids: frozenset[int] | None = None
+    ) -> SecurityEvent:
         events, _ = await self.list()
         if event_id != 42:
             from app.core.exceptions import ApplicationError
@@ -80,6 +89,7 @@ async def test_camera_and_event_endpoints() -> None:
 
     assert cameras.status_code == 200
     assert cameras.json()[0]["frigate_camera_name"] == "front_door"
+    assert cameras.json()[0]["health_status"] is None
     assert events.status_code == 200
     assert events.json()["total"] == 1
     assert events.json()["items"][0]["metadata"] == {}

@@ -19,6 +19,15 @@ bearer_scheme = HTTPBearer(auto_error=False)
 class Principal:
     subject: str
     scopes: frozenset[str]
+    property_ids: frozenset[int] | None = frozenset()
+
+    def can_access_property(self, property_id: int) -> bool:
+        """Return whether this identity may access a property.
+
+        ``None`` is reserved for the explicit auth-disabled local-development
+        principal. Authenticated tokens must enumerate property IDs.
+        """
+        return self.property_ids is None or property_id in self.property_ids
 
 
 def authenticate_token(token: str | None, settings: Settings | None = None) -> Principal:
@@ -26,7 +35,11 @@ def authenticate_token(token: str | None, settings: Settings | None = None) -> P
 
     settings = settings or get_settings()
     if not settings.auth_enabled:
-        return Principal(subject="local-development", scopes=frozenset({"read"}))
+        return Principal(
+            subject="local-development",
+            scopes=frozenset({"read", "write"}),
+            property_ids=None,
+        )
     if not settings.jwt_secret:
         raise ApplicationError(
             "AUTH_CONFIGURATION_ERROR",
@@ -72,7 +85,17 @@ def authenticate_token(token: str | None, settings: Settings | None = None) -> P
         scopes = frozenset(raw_scopes)
     else:
         scopes = frozenset()
-    return Principal(subject=subject, scopes=scopes)
+    raw_property_ids = payload.get("property_ids", [])
+    if not isinstance(raw_property_ids, list) or any(
+        not isinstance(property_id, int) or isinstance(property_id, bool) or property_id < 1
+        for property_id in raw_property_ids
+    ):
+        raise ApplicationError("UNAUTHORIZED", "The access token has invalid property access claims.", 401)
+    return Principal(
+        subject=subject,
+        scopes=scopes,
+        property_ids=frozenset(raw_property_ids),
+    )
 
 
 async def get_current_principal(

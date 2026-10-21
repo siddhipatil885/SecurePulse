@@ -15,6 +15,7 @@ async def test_publisher_broadcasts_serialized_security_event() -> None:
     second = await publisher.subscribe()
     event = SecurityEvent(
         id=42,
+        property_id=1,
         camera_id=1,
         event_type="LOITERING",
         object_type="person",
@@ -43,6 +44,7 @@ async def test_unsubscribed_queue_stops_receiving_events() -> None:
 
     event = SecurityEvent(
         id=1,
+        property_id=1,
         camera_id=1,
         event_type="DETECTION",
         object_type="person",
@@ -55,3 +57,27 @@ async def test_unsubscribed_queue_stops_receiving_events() -> None:
     await publisher.publish(event)
 
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_publisher_filters_events_by_authorized_property() -> None:
+    publisher = InMemoryEventPublisher()
+    allowed = await publisher.subscribe(frozenset({1}))
+    denied = await publisher.subscribe(frozenset({2}))
+    event = SecurityEvent(
+        id=7,
+        property_id=1,
+        camera_id=1,
+        event_type="DETECTION",
+        object_type="person",
+        confidence=0.8,
+        timestamp=datetime(2026, 9, 19, tzinfo=timezone.utc),
+        severity="INFO",
+        status="OPEN",
+        event_metadata={},
+    )
+
+    await publisher.publish(event)
+
+    assert (await allowed.get())["property_id"] == 1
+    assert denied.empty()

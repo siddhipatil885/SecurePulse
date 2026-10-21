@@ -10,7 +10,7 @@ from app.database.base import Base
 # Import every mapped model before reading Base.metadata.  Alembic needs these
 # imports for autogeneration and schema consistency checks, even when a
 # migration explicitly creates the corresponding tables.
-from app.models import Alert, Camera, Evidence, SecurityEvent, Track
+import app.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
@@ -23,6 +23,8 @@ def migration_database_url() -> str:
     database_url = get_settings().database_url
     if database_url.startswith("postgresql+asyncpg://"):
         return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     return database_url
 
 
@@ -42,6 +44,12 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        context.configure(connection=supplied_connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

@@ -1,0 +1,29 @@
+name: Backend acceptance
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: securepulse
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: securepulse_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U securepulse -d securepulse_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://securepulse:test-only-password@localhost:5432/securepulse_test
+      RUN_POSTGRES_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q

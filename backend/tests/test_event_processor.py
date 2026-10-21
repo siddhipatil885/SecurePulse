@@ -37,7 +37,7 @@ def make_detection(**overrides: object) -> DetectionEvent:
 
 def make_processor(
     camera: Camera | None = Camera(
-        id=1, name="Front Door", frigate_camera_name="front_door", enabled=True
+        id=1, property_id=1, name="Front Door", frigate_camera_name="front_door", enabled=True
     ),
     existing: SecurityEvent | None = None,
     security_engine: AsyncMock | None = None,
@@ -49,6 +49,7 @@ def make_processor(
     camera_repository.get_by_frigate_name.return_value = camera
     event_repository = AsyncMock()
     event_repository.get_by_frigate_event_id.return_value = existing
+    event_repository.get_receipt.return_value = None
     event_repository.get_recent_by_camera_object.return_value = None
     def persist(event: SecurityEvent) -> SecurityEvent:
         event.id = event.id or 1
@@ -83,7 +84,25 @@ async def test_processor_persists_unclassified_event() -> None:
     assert result.event.camera_id == 1
     assert result.event.zone == "entrance"
     event_repository.create.assert_awaited_once()
+    event_repository.create_receipt.assert_awaited_once()
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_processor_short_circuits_an_already_received_phase() -> None:
+    persisted = SecurityEvent(id=42, property_id=1)
+    receipt = AsyncMock()
+    receipt.security_event = persisted
+    processor, session, _, event_repository = make_processor()
+    event_repository.get_receipt.return_value = receipt
+
+    result = await processor.process(make_detection(metadata={"lifecycle": "new"}))
+
+    assert result.duplicate is True
+    assert result.event is persisted
+    event_repository.create.assert_not_awaited()
+    event_repository.create_receipt.assert_not_awaited()
+    session.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -96,7 +115,8 @@ async def test_processor_returns_duplicate_without_creating_event() -> None:
     assert result.duplicate is True
     assert result.event.id == 42
     event_repository.create.assert_not_awaited()
-    session.commit.assert_not_awaited()
+    session.commit.assert_awaited_once()
+    event_repository.create_receipt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -181,7 +201,7 @@ async def test_processor_rejects_unknown_camera() -> None:
 @pytest.mark.asyncio
 async def test_processor_rejects_disabled_camera() -> None:
     camera = Camera(
-        id=1, name="Front Door", frigate_camera_name="front_door", enabled=False
+        id=1, property_id=1, name="Front Door", frigate_camera_name="front_door", enabled=False
     )
     processor, _, _, _ = make_processor(camera=camera)
 

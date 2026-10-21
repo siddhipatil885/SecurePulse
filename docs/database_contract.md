@@ -1,5 +1,12 @@
 # Backend Contract: Database Layer
 
+> **Current extension:** Tenant isolation, durable receipts, incident history,
+> audit, notification outbox, and response-assignment persistence are specified
+> in [`contracts/backend-domain-v1.md`](contracts/backend-domain-v1.md). The
+> original table descriptions below remain for compatibility with migrations
+> `0001` through `0004`. Migration `0008` adds camera zones and timestamped
+> health observations.
+
 This document outlines the database models and expectations for the FastAPI backend integration. The database layer uses SQLAlchemy 2.x with async PostgreSQL access via `asyncpg`.
 
 ## Accessing the Database
@@ -27,6 +34,17 @@ Represents a physical CCTV camera stream.
 | `location` | `str` | Physical location description | No |
 | `enabled` | `bool` | Active status (Default: True) | Yes |
 | `created_at` / `updated_at` | `datetime` | Timezone-aware UTC timestamps | Auto |
+
+Camera API responses also expose the latest persisted `health_status` and
+`health_observed_at`; both are `null` when no observation has been recorded.
+
+### Camera operational tables
+
+- `zones` stores a camera-owned external zone identifier, display name, kind,
+  coordinate JSON, and active state. `(camera_id, external_id)` is unique.
+- `camera_health_observations` is an append-only stream of status, source,
+  observation time, and details JSON. Tenant ownership is always derived from
+  the referenced camera.
 
 ### 2. `SecurityEvent`
 Represents a detected threat/event.

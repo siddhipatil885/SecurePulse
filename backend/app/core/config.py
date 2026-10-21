@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     )
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
     port: int = Field(default=8000, ge=1, le=65535, validation_alias="PORT")
+    cors_origins: str = Field(
+        default="http://localhost:5500,http://127.0.0.1:5500,http://localhost:5173,http://127.0.0.1:5173",
+        validation_alias="CORS_ORIGINS",
+    )
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     frigate_url: str = Field(default="http://localhost:5000", validation_alias="FRIGATE_URL")
     go2rtc_url: str = Field(default="http://localhost:1984", validation_alias="GO2RTC_URL")
@@ -49,6 +53,10 @@ class Settings(BaseSettings):
         default=False, validation_alias="USE_LOCAL_SECURITY_ENGINE"
     )
     auth_enabled: bool = Field(default=False, validation_alias="AUTH_ENABLED")
+    evidence_root: str = Field(default="", validation_alias="EVIDENCE_ROOT")
+    mutation_rate_limit_per_minute: int = Field(
+        default=30, ge=1, validation_alias="MUTATION_RATE_LIMIT_PER_MINUTE"
+    )
     jwt_secret: str = Field(default="", validation_alias="JWT_SECRET")
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(
         default="HS256", validation_alias="JWT_ALGORITHM"
@@ -85,7 +93,20 @@ class Settings(BaseSettings):
     def validate_authentication_configuration(self) -> "Settings":
         if self.auth_enabled and len(self.jwt_secret) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters when authentication is enabled")
+        if self.app_env == "production" and not self.auth_enabled:
+            raise ValueError("AUTH_ENABLED must be true in production")
+        if self.app_env == "production" and not self.database_url:
+            raise ValueError("DATABASE_URL must be configured in production")
+        if not self.parsed_cors_origins:
+            raise ValueError("CORS_ORIGINS must contain at least one origin")
+        if self.app_env == "production" and "*" in self.parsed_cors_origins:
+            raise ValueError("Wildcard CORS origins are not allowed in production")
         return self
+
+    @property
+    def parsed_cors_origins(self) -> list[str]:
+        """Return normalized comma-separated browser origins."""
+        return [origin.strip().rstrip("/") for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache

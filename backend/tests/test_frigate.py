@@ -53,6 +53,30 @@ def test_parser_accepts_end_event_when_frigate_omits_end_time() -> None:
     assert detection.timestamp.tzinfo == timezone.utc
 
 
+def test_parser_revision_deduplicates_replays_but_preserves_real_updates() -> None:
+    parser = FrigateEventParser()
+    payload = {
+        "type": "update",
+        "after": {
+            "id": "abc123",
+            "camera": "front_door",
+            "label": "person",
+            "top_score": 0.94,
+            "start_time": 1790105420.0,
+            "frame_time": 1790105421.0,
+        },
+    }
+
+    first = parser.parse(payload)
+    replay = parser.parse(payload)
+    payload["after"]["frame_time"] = 1790105422.0
+    update = parser.parse(payload)
+
+    assert first.metadata["revision"] == replay.metadata["revision"]
+    assert first.metadata["revision"] != update.metadata["revision"]
+    assert len(first.metadata["revision"]) == 64
+
+
 @pytest.mark.parametrize(
     "payload",
     [

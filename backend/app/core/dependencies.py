@@ -8,11 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.database import get_db_session
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
+from app.repositories.incidents import IncidentRepository
+from app.repositories.properties import PropertyRepository
 from app.realtime.publisher import InMemoryEventPublisher
 from app.services.person_tracker import PersonTracker
 from app.core.config import get_settings
+from app.core.rate_limit import SlidingWindowRateLimiter
 from app.services.camera_service import CameraService
 from app.services.event_service import EventService
+from app.services.incident_service import IncidentService
+from app.services.property_service import PropertyService
 
 _event_publisher = InMemoryEventPublisher()
 _settings = get_settings()
@@ -21,6 +26,9 @@ _person_tracker = PersonTracker(
     minimum_detection_confidence=_settings.tracking_minimum_detection_confidence,
     default_frame_width=_settings.frame_width,
     default_frame_height=_settings.frame_height,
+)
+_mutation_rate_limiter = SlidingWindowRateLimiter(
+    limit=_settings.mutation_rate_limit_per_minute
 )
 
 
@@ -37,6 +45,14 @@ def get_event_service(session: AsyncSession = Depends(get_session)) -> EventServ
     return EventService(EventRepository(session))
 
 
+def get_incident_service(session: AsyncSession = Depends(get_session)) -> IncidentService:
+    return IncidentService(IncidentRepository(session))
+
+
+def get_property_service(session: AsyncSession = Depends(get_session)) -> PropertyService:
+    return PropertyService(PropertyRepository(session))
+
+
 def get_event_publisher() -> InMemoryEventPublisher:
     return _event_publisher
 
@@ -44,3 +60,7 @@ def get_event_publisher() -> InMemoryEventPublisher:
 def get_person_tracker() -> PersonTracker:
     """Return the process-local projection of Frigate's active person tracks."""
     return _person_tracker
+
+
+def get_mutation_rate_limiter() -> SlidingWindowRateLimiter:
+    return _mutation_rate_limiter
