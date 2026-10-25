@@ -18,20 +18,21 @@ Phase 1 initializes the edge-first perception infrastructure for SecurePulse usi
 
 ```text
 SecurePulse/
-├── frigate/
+└── backend/
+    ├── frigate/
 │   ├── config/
 │   │   └── frigate.yml       # Frigate NVR configuration
 │   └── media/                # Recorded event video clips & snapshots
-├── deployment/
-│   ├── docker-compose.yml    # Services: frigate, mqtt, rtsp-sim
-│   ├── .env.example          # Environment variables template
-│   └── mosquitto/
-│       └── config/
-│           └── mosquitto.conf # MQTT Broker configuration
-├── tests/
-│   └── test_mqtt_subscriber.py # MQTT Event consumer verification
-└── docs/
-    └── phase1_setup.md       # Setup documentation
+    ├── deployment/
+    │   ├── docker-compose.yml    # Services: frigate, mqtt, rtsp-sim
+    │   ├── .env.example          # Environment variables template
+    │   └── mosquitto/
+    │       └── config/
+    │           └── mosquitto.conf # MQTT Broker configuration
+    ├── tests/
+    │   └── test_mqtt_subscriber.py # MQTT Event consumer verification
+    └── docs/
+        └── phase1_setup.md       # Setup documentation
 ```
 
 ---
@@ -41,7 +42,7 @@ SecurePulse/
 Copy the sample environment file to `.env`:
 
 ```bash
-cd deployment
+cd backend/deployment
 cp .env.example .env
 ```
 

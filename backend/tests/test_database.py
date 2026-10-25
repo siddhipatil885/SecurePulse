@@ -15,6 +15,10 @@ def test_models_are_registered_with_shared_metadata() -> None:
         "evidence",
         "security_events",
         "tracks",
+        "reporter_users",
+        "properties",
+        "property_memberships",
+        "property_cameras",
     }
 
 

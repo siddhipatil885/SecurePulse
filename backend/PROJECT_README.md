@@ -209,41 +209,20 @@ SecurePulse is designed to scale from small embedded devices to large centralize
 
 ```text
 SecurePulse/
-├── backend/                    # FastAPI backend & event processing engine
-│   ├── alembic/                # Database migrations (PostgreSQL)
-│   ├── app/
-│   │   ├── api/                # REST & WebSocket endpoints
-│   │   ├── core/               # App configuration, auth, logging
-│   │   ├── database/           # Async SQLAlchemy engine & session factory
-│   │   ├── domain/             # Pydantic schemas & business logic models
-│   │   ├── integrations/       # Frigate NVR & Security Engine HTTP adapters
-│   │   ├── models/             # SQLAlchemy ORM models (Camera, SecurityEvent, Evidence)
-│   │   ├── realtime/           # In-process WebSocket event publisher
-│   │   ├── repositories/       # Data access repositories
-│   │   ├── schemas/            # Request/response validation schemas
-│   │   ├── services/           # Event processing & camera services
-│   │   ├── workers/            # Frigate MQTT event listener background worker
-│   │   └── main.py             # Application entrypoint
-│   ├── tests/                  # Pytest test suite (unit & integration)
-│   ├── alembic.ini
-│   ├── requirements.txt
-│   └── README.md
-├── dashboard/                  # Frontend web dashboard (React + Vite, scaffolded)
-├── deployment/                 # Orchestration & infrastructure
-│   ├── mosquitto/              # Eclipse Mosquitto MQTT configuration
-│   ├── docker-compose.yml      # Containerized stack (Frigate, Mosquitto, MediaMTX)
-│   └── .env.example            # Deployment environment variables
-├── docs/                       # Architecture & setup guides
-│   ├── phase1_setup.md         # Phase 1 perception infrastructure setup guide
-│   └── database_contract.md    # Database models & access contract
-├── frigate/                    # Frigate NVR configuration & media
-│   ├── config/frigate.yml
-│   └── media/
-├── tests/                      # System & end-to-end integration tests
-│   └── test_mqtt_subscriber.py # Standalone MQTT subscriber verification
-├── .env.example                # Central environment variables template
-├── .gitignore                  # Monorepo git ignore rules
-└── README.md
+└── backend/                   # Consolidated project root
+    ├── alembic/               # Database migrations (PostgreSQL)
+    ├── app/                   # FastAPI backend & event processing engine
+    ├── tests/                 # Pytest unit, integration, and system tests
+    ├── dashboard/             # Frontend web dashboard (React + Vite)
+    ├── deployment/            # Orchestration and infrastructure
+    ├── docs/                  # Architecture and setup guides
+    ├── frigate/               # Frigate NVR configuration and media
+    ├── mediamtx/              # MediaMTX configuration
+    ├── mosquitto/             # MQTT configuration
+    ├── alembic.ini
+    ├── requirements.txt
+    ├── README.md              # Backend-specific guide
+    └── PROJECT_README.md      # Full project guide
 ```
 
 ---
@@ -259,7 +238,7 @@ SecurePulse/
 Launch Frigate NVR, Eclipse Mosquitto MQTT Broker, and the MediaMTX RTSP stream simulator:
 
 ```bash
-cd deployment
+cd backend/deployment
 cp .env.example .env
 docker compose up -d
 ```
