@@ -44,6 +44,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     global _frigate_listener, _mqtt_connected
     settings = get_settings()
+    # Uvicorn can configure its own handlers after the app was imported.
+    configure_logging(settings.log_level)
     logger.info("Application startup", extra={"app_name": settings.app_name})
     event_loop = asyncio.get_running_loop()
     track_reaper_task: asyncio.Task[None] | None = None

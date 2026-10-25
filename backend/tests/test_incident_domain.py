@@ -66,7 +66,7 @@ async def test_evidence_catalog_access_is_audited() -> None:
     incident = SecurityEvent(id=10, property_id=1, status="OPEN")
     repository = AsyncMock()
     repository.list_evidence.return_value = []
-    repository.get_for_update.return_value = incident
+    repository.get.return_value = incident
     service = IncidentService(repository)
 
     result = await service.evidence(

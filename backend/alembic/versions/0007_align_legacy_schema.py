@@ -46,18 +46,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_security_events_frigate_event_id", table_name="security_events")
-    op.create_index(
-        "ix_security_events_frigate_event_id",
-        "security_events",
-        ["frigate_event_id"],
-        unique=True,
-    )
-    op.alter_column(
-        "security_events",
-        "confidence",
-        existing_type=sa.Float(),
-        nullable=True,
-    )
-    op.drop_column("evidence", "timestamp")
-    op.drop_index("ix_cameras_enabled", table_name="cameras")
+    """Reject reversal because fresh and legacy schemas have different origins."""
+    raise NotImplementedError("0007_align_legacy is not safely reversible; use a forward repair or restore a backup")

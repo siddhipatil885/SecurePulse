@@ -34,8 +34,8 @@ cd backend
 | Component | Status | Existing evidence | Required follow-up |
 |---|---|---|---|
 | FastAPI application factory and lifecycle | `KEEP` | `backend/app/main.py` | Preserve current startup, MQTT listener, router registration, and shutdown behavior |
-| PostgreSQL async engine/session | `KEEP / FIXED` | Async Neon connection passed after translating libpq SSL options for asyncpg |
-| Alembic migration chain | `PASS` | `backend/alembic/versions/0001` through `0008`; live head and metadata agree |
+| PostgreSQL async engine/session | `KEEP / FIXED` | Async Neon connection passed after translating libpq SSL options for asyncpg | |
+| Alembic migration chain | `PASS` | `backend/alembic/versions/0001` through `0008`; live head and metadata agree | Review migration 0009 before deploying it |
 | Camera model and repository | `KEEP / FIX` | `backend/app/models/camera.py`, `backend/app/repositories/cameras.py` | Add property ownership only through a reviewed, backward-compatible migration |
 | Security-event persistence | `KEEP / FIX` | `backend/app/models/security_event.py`, `backend/app/repositories/events.py` | Clarify source receipt versus incident semantics and lifecycle/revision deduplication |
 | Evidence metadata | `KEEP / FIX` | `backend/app/models/evidence.py`, `backend/app/repositories/evidence.py` | Add authorized access and audit behavior; continue storing references rather than media bytes |
@@ -52,7 +52,7 @@ cd backend
 | Properties and memberships | `IMPLEMENTED` | `Property`, `PropertyMembership`, camera/event ownership in migration `0005` | Populate real properties through an approved administrative workflow |
 | Zones and camera health | `IMPLEMENTED` | `Zone`, `CameraHealthObservation`, migration `0008`; camera reads expose latest observed state | Engineer 1 supplies observations and canonical external zone identifiers |
 | Resource-level authorization | `IMPLEMENTED LOCAL` | Signed `property_ids` claims filter camera, event, incident, media, track, and realtime reads | Identity issuer must derive claims from active memberships |
-| Durable source-event receipts | `IMPLEMENTED / VERIFIED` | Duplicate receipt rejected by live rollback-only transaction smoke test |
+| Durable source-event receipts | `IMPLEMENTED / VERIFIED` | Duplicate receipt rejected by live rollback-only transaction smoke test | |
 | Canonical incident history | `IMPLEMENTED` | `IncidentStatusHistory` plus command service | Confirm final state vocabulary with Engineer 3 |
 | General audit records | `IMPLEMENTED` | `AuditRecord` written with incident state commands | Add retention duration after product approval |
 | Notification outbox/attempts | `IMPLEMENTED` | `NotificationOutbox`, `NotificationAttempt` | Engineer 3 still owns sender/retry behavior |

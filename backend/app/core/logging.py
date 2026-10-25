@@ -20,5 +20,6 @@ def configure_logging(level: str) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         force=True,
     )
-    for handler in logging.getLogger().handlers:
-        handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
+        for handler in logging.getLogger(name).handlers:
+            handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))

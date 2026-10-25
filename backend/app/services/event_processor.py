@@ -88,11 +88,12 @@ class EventProcessor:
             return await self._process(detection)
         except IntegrityError:
             await self.session.rollback()
+            lifecycle, revision = self._receipt_identity(detection)
             receipt = await self.event_repository.get_receipt(
                 source_system=detection.source,
                 source_event_id=detection.source_event_id,
-                event_phase=str(detection.metadata.get("lifecycle") or "new"),
-                revision=str(detection.metadata.get("revision", "0")),
+                event_phase=lifecycle,
+                revision=revision,
             )
             if receipt is not None and receipt.security_event is not None:
                 return EventProcessResult(event=receipt.security_event, duplicate=True)
@@ -110,9 +111,7 @@ class EventProcessor:
         if not camera.enabled:
             raise CameraDisabledError(f"Camera '{detection.camera}' is disabled")
 
-        lifecycle = str(detection.metadata.get("lifecycle") or "new")
-        raw_revision = detection.metadata.get("revision", "0")
-        revision = str(raw_revision) if isinstance(raw_revision, (str, int)) and not isinstance(raw_revision, bool) else "0"
+        lifecycle, revision = self._receipt_identity(detection)
         prior_receipt = await self.event_repository.get_receipt(
             source_system=detection.source,
             source_event_id=detection.source_event_id,
@@ -192,7 +191,8 @@ class EventProcessor:
 
                 # End events carry the final timestamp and close the record.
                 if lifecycle == "end":
-                    existing.status = "CLOSED"
+                    if existing.status in {"OPEN", "UNCLASSIFIED"}:
+                        existing.status = "CLOSED"
                     end_time = self._parse_event_timestamp(
                         detection.metadata.get("end_time")
                     )
@@ -370,6 +370,14 @@ class EventProcessor:
                     },
                 )
             )
+
+    @staticmethod
+    def _receipt_identity(detection: DetectionEvent) -> tuple[str, str]:
+        """Use the same normalized identity for receipt writes and race recovery."""
+        lifecycle = str(detection.metadata.get("lifecycle") or "new")
+        raw = detection.metadata.get("revision", "0")
+        revision = str(raw) if isinstance(raw, (str, int)) and not isinstance(raw, bool) else "0"
+        return lifecycle, revision
 
     @staticmethod
     def _correlation_id(detection: DetectionEvent, lifecycle: str, revision: str) -> str:

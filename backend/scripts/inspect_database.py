@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import psycopg2
+from psycopg2 import sql
 
 from app.core.config import Settings
 
@@ -39,7 +40,7 @@ def main() -> None:
                 "marshal_availability", "assignments", "assignment_events",
             ):
                 if table in tables:
-                    cursor.execute(f'SELECT count(*) FROM "{table}"')
+                    cursor.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
                     print(f"rows.{table}={cursor.fetchone()[0]}")
 
             if "properties" in tables:

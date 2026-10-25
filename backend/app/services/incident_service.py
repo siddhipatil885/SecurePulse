@@ -35,7 +35,7 @@ class IncidentService:
         evidence = await self.repository.list_evidence(incident_id, property_ids)
         if evidence is None:
             raise ApplicationError("INCIDENT_NOT_FOUND", "The requested incident does not exist.", 404)
-        incident = await self.repository.get_for_update(incident_id, property_ids)
+        incident = await self.repository.get(incident_id, property_ids)
         if incident is None:
             raise ApplicationError("INCIDENT_NOT_FOUND", "The requested incident does not exist.", 404)
         await self.repository.audit_evidence_access(

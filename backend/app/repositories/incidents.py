@@ -20,10 +20,19 @@ class IncidentRepository:
             statement = statement.where(SecurityEvent.property_id.in_(property_ids))
         return await self.session.scalar(statement)
 
+    async def get(
+        self, incident_id: int, property_ids: frozenset[int] | None
+    ) -> SecurityEvent | None:
+        """Authorize a read without blocking concurrent incident commands."""
+        statement = select(SecurityEvent).where(SecurityEvent.id == incident_id)
+        if property_ids is not None:
+            statement = statement.where(SecurityEvent.property_id.in_(property_ids))
+        return await self.session.scalar(statement)
+
     async def list_history(
         self, incident_id: int, property_ids: frozenset[int] | None
     ) -> list[IncidentStatusHistory] | None:
-        incident = await self.get_for_update(incident_id, property_ids)
+        incident = await self.get(incident_id, property_ids)
         if incident is None:
             return None
         statement = (
@@ -36,7 +45,7 @@ class IncidentRepository:
     async def list_evidence(
         self, incident_id: int, property_ids: frozenset[int] | None
     ) -> list[Evidence] | None:
-        incident = await self.get_for_update(incident_id, property_ids)
+        incident = await self.get(incident_id, property_ids)
         if incident is None:
             return None
         statement = select(Evidence).where(Evidence.event_id == incident_id).order_by(Evidence.timestamp)

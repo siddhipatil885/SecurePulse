@@ -47,7 +47,7 @@ def postgres_schema():
             config = Config("alembic.ini")
             config.attributes["connection"] = connection
             command.upgrade(config, "head")
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_camera_zones_health"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_event_camera_cascade"
         yield url, schema, engine
     finally:
         with engine.begin() as connection:
@@ -163,7 +163,9 @@ def test_populated_forward_and_reverse_migration(postgres_schema):
         config = Config("alembic.ini")
         config.attributes["connection"] = connection
         command.downgrade(config, "0007_align_legacy")
+        assert connection.scalar(text("SELECT confdeltype FROM pg_constraint WHERE conrelid = 'security_events'::regclass AND conname = 'fk_security_events_camera_id_cameras'")) == "a"
         command.upgrade(config, "head")
+        assert connection.scalar(text("SELECT confdeltype FROM pg_constraint WHERE conrelid = 'security_events'::regclass AND conname = 'fk_security_events_camera_id_cameras'")) == "c"
         assert connection.scalar(text("SELECT count(*) FROM cameras")) == before
 
 
@@ -251,11 +253,21 @@ async def test_foreign_key_rejects_orphan_evidence(database):
         await session.rollback()
 
 
-def test_logical_restore_including_incidents_and_audits(postgres_schema):
+async def test_logical_restore_including_incidents_and_audits(postgres_schema, database):
     """Backup and restore every domain table, only inside the disposable schema."""
     import json
     from time import perf_counter
     from app.database.base import Base
+    from app.repositories.incidents import IncidentRepository
+    from app.services.incident_service import IncidentService
+    camera = await seed(database)
+    result = await ingest(database, detection(camera))
+    async with database() as session:
+        await IncidentService(IncidentRepository(session)).command(
+            result.event.id, "acknowledge", actor_subject="restore-test",
+            property_ids=frozenset({camera.property_id}), reason="Seed restore audit",
+            correlation_id=uuid4().hex,
+        )
     _, schema, engine = postgres_schema
     started = perf_counter()
     with engine.connect() as connection:
@@ -266,7 +278,7 @@ def test_logical_restore_including_incidents_and_audits(postgres_schema):
             backup = {}
             for table in tables:
                 backup[table.name] = connection.scalar(text(f'SELECT coalesce(json_agg(t), \'[]\'::json) FROM "{table.name}" t'))
-            # The earlier API test persisted both incidents and audit records.
+            # This test creates its own incident and audit, independent of order.
             assert backup["security_events"] and backup["audit_records"]
             for table in reversed(tables):
                 connection.execute(text(f'DELETE FROM "{table.name}"'))
@@ -274,7 +286,8 @@ def test_logical_restore_including_incidents_and_audits(postgres_schema):
                 connection.execute(text(f'INSERT INTO "{table.name}" SELECT * FROM json_populate_recordset(NULL::"{table.name}", CAST(:payload AS json))'),
                                    {"payload": json.dumps(backup[table.name])})
                 restored = connection.scalar(text(f'SELECT coalesce(json_agg(t), \'[]\'::json) FROM "{table.name}" t'))
-                canonical = lambda rows: sorted(json.dumps(row, sort_keys=True) for row in rows)
+                def canonical(rows):
+                    return sorted(json.dumps(row, sort_keys=True) for row in rows)
                 assert canonical(restored) == canonical(backup[table.name])
         finally:
             transaction.rollback()

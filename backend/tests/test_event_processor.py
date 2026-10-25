@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from sqlalchemy.exc import IntegrityError
+from app.models.operations import IncidentStatusHistory
 
 import pytest
 
@@ -188,6 +191,28 @@ async def test_processor_closes_event_on_end_lifecycle() -> None:
     assert existing.timestamp.timestamp() == 1790105425.5
     event_repository.create.assert_not_awaited()
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("status", ["ACKNOWLEDGED", "RESOLVED", "DISMISSED"])
+async def test_source_end_preserves_operator_decision(status):
+    """An object leaving the frame must not undo a human incident command."""
+    existing = SecurityEvent(id=42, status=status, event_metadata={})
+    processor, session, _, _ = make_processor(existing=existing)
+    await processor.process(make_detection(metadata={"lifecycle": "end"}))
+    assert existing.status == status
+    assert not any(isinstance(call.args[0], IncidentStatusHistory) for call in session.add.call_args_list)
+
+
+@pytest.mark.parametrize("revision", [True, None, 1.5, {}])
+async def test_conflict_recovery_uses_normalized_revision(revision):
+    """Malformed revisions normalize identically for insertion and recovery."""
+    processor, session, _, repository = make_processor()
+    winner = SecurityEvent(id=99)
+    repository.get_receipt.side_effect = [None, SimpleNamespace(security_event=winner)]
+    repository.create.side_effect = IntegrityError("insert", {}, Exception("duplicate"))
+    result = await processor.process(make_detection(metadata={"revision": revision}))
+    assert result.event is winner and result.duplicate
+    assert all(call.kwargs["revision"] == "0" for call in repository.get_receipt.call_args_list)
 
 
 @pytest.mark.asyncio

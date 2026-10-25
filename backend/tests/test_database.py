@@ -48,6 +48,19 @@ def test_database_url_translates_neon_libpq_options_for_asyncpg() -> None:
     assert "channel_binding" not in normalized
 
 
+@pytest.mark.parametrize("mode", ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"])
+def test_database_tls_mode_is_preserved(mode):
+    """Never silently weaken a caller's configured TLS verification level."""
+    from sqlalchemy.engine import make_url
+    url = _async_database_url(f"postgresql://user:password@localhost/db?sslmode={mode}")
+    assert make_url(url).query["ssl"] == mode
+
+
+def test_unknown_database_tls_mode_fails_closed():
+    with pytest.raises(ValueError, match="sslmode"):
+        _async_database_url("postgresql://user:password@localhost/db?sslmode=typo")
+
+
 @pytest.mark.parametrize("database_url", ["", "mysql://localhost/db"])
 def test_database_url_rejects_missing_or_non_postgresql_urls(database_url: str) -> None:
     with pytest.raises((RuntimeError, ValueError)):

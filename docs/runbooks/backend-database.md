@@ -25,7 +25,16 @@ acceptance tests. CI runs them against an ephemeral PostgreSQL 16 service.
 
 Migration 0007 was corrected to accept both fresh 0001 objects and legacy Neon
 objects. Already-upgraded databases do not rerun it. Prefer forward repair over
-downgrades on shared targets; the reversal test exercises 0008 only in test data.
+downgrades on shared targets. Migration 0007 explicitly refuses downgrade because
+it cannot reconstruct the original legacy schema without risking evidence loss.
+The reversal test exercises 0008 and 0009 only in isolated test data.
+Migration 0009 aligns the event-to-camera foreign key with the model's cascade
+behavior. It is prepared for review; it has not been applied to public Neon tables.
+
+When running `python -m scripts.smoke_api` with authentication enabled, supply a
+read-scoped bearer token through `SMOKE_API_TOKEN`. The script fails clearly if
+the token is missing and never prints it. Do not disable production auth for a
+smoke test.
 
 ```powershell
 cd backend

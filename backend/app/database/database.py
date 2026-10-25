@@ -30,8 +30,10 @@ def _async_database_url(database_url: str) -> str:
     sslmode = query.pop("sslmode", None)
     # libpq/psycopg supports channel_binding, while asyncpg currently does not.
     query.pop("channel_binding", None)
-    if sslmode in {"require", "verify-ca", "verify-full"}:
-        query["ssl"] = "require"
+    if sslmode is not None:
+        if sslmode not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+            raise ValueError("Unsupported PostgreSQL sslmode")
+        query["ssl"] = sslmode
     return url.set(drivername="postgresql+asyncpg", query=query).render_as_string(
         hide_password=False
     )
