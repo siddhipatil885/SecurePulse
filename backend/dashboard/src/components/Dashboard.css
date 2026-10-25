@@ -5,6 +5,21 @@
   overflow: hidden;
 }
 
+.dashboard-toolbar, .dashboard-notice { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 24px; align-items: center; }
+.dashboard-toolbar form { display: flex; gap: 8px; }
+button, select, input { font: inherit; color: inherit; background: var(--bg-panel, #12232e); border: 1px solid #39505e; border-radius: 4px; padding: 6px; }
+button { cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.data-panel { padding: 12px; }
+.data-panel small { display: block; }
+.data-panel img, .data-panel video { max-width: 100%; }
+.data-panel dd, .data-panel li { overflow-wrap: anywhere; }
+.incident-detail { height: auto; overflow: visible; flex-shrink: 0; }
+.dashboard-right-sidebar > .data-panel { flex-shrink: 0; }
+.operations { max-height: 180px; overflow: auto; flex-shrink: 0; }
+.dashboard-right-sidebar p { font-size: .8rem; }
+@media (max-width: 1023px) { .dashboard-main { overflow-y: auto; } .dashboard-container { height: auto; min-height: 100vh; overflow: auto; } }
+
 .dashboard-main {
   flex: 1;
   display: flex;

@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
+        '/health': { target: backendUrl, changeOrigin: true },
         '/api': {
           target: backendUrl,
           changeOrigin: true,

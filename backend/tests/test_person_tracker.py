@@ -57,4 +57,7 @@ async def test_track_messages_are_separate_from_security_events() -> None:
     publisher = InMemoryEventPublisher()
     queue = await publisher.subscribe()
     await publisher.publish_tracks("1", [{"track_id": "person_track_a"}])
-    assert await queue.get() == {"type": "person_tracks", "data": {"camera_id": "1", "tracks": [{"track_id": "person_track_a"}]}}
+    message = await queue.get()
+    assert message["version"] == 1 and message["sequence"] == 1
+    assert message["type"] == "person_tracks"
+    assert message["data"] == {"camera_id": "1", "tracks": [{"track_id": "person_track_a"}]}

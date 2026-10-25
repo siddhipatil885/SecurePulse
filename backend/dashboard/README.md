@@ -1,5 +1,8 @@
 # SecurePulse Dashboard
 
+See [the dashboard integration runbook](../../docs/runbooks/web-dashboard-e2e.md)
+for authentication, property filtering, playback grants, tests and acceptance blockers.
+
 The dashboard reads cameras and security events from the backend API. During local
 development, Vite proxies `/api` to `http://localhost:8000` by default.
 
@@ -17,11 +20,11 @@ When the API is unavailable it shows an error state.
 
 ## Detection overlay
 
-The dashboard loads `/api/v1/tracks` and consumes `person_tracks` messages on
-the existing WebSocket. Each temporary anonymous person track is rendered in a
-dedicated layer above the WebRTC video. The layer maps normalised detector
-coordinates through the video's `object-fit: cover` rectangle, including crop
-offsets, so boxes remain aligned when the card is resized.
+The dashboard loads `/api/v1/tracks` and uses the existing WebSocket to trigger
+authorized REST resync. Tracks are asynchronous observations. Live detection
+rectangles are suppressed because MQTT coordinates are not synchronized with
+browser video frames. The preserved geometry utility supports cover/contain,
+mirroring and resize for future frame-linked overlays; its behavior is tested.
 
 Set `VITE_DEBUG_DETECTIONS=true` only for development to display temporary
 track IDs and confidence. The normal operator view shows only a Person label

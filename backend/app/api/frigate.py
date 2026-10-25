@@ -1,6 +1,8 @@
 """Proxy Frigate camera media and WebRTC signaling."""
 
 import httpx
+import jwt
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.auth import Principal, require_scope
@@ -11,6 +13,27 @@ from app.services.camera_service import CameraService
 router = APIRouter(prefix="/frigate", tags=["frigate"])
 
 _frigate_token: str | None = None
+
+
+@router.post("/cameras/{camera_id}/playback-access")
+async def playback_access(
+    camera_id: int,
+    response: Response,
+    principal: Principal = Depends(require_scope("read")),
+    service: CameraService = Depends(get_camera_service),
+) -> dict:
+    """Authorize a one-minute signaling grant; no source credentials leave the API."""
+    camera = await service.get(camera_id, property_ids=principal.property_ids)
+    if not camera.enabled:
+        raise HTTPException(409, "Camera is disabled")
+    settings = get_settings()
+    if len(settings.jwt_secret) < 32:
+        raise HTTPException(503, "Playback signing is not configured")
+    expires = datetime.now(timezone.utc) + timedelta(seconds=60)
+    grant = jwt.encode({"sub": principal.subject, "aud": "camera-playback", "exp": expires,
+        "camera_id": camera.id, "property_id": camera.property_id}, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    response.headers["Cache-Control"] = "no-store"
+    return {"grant": grant, "expires_at": expires.isoformat()}
 
 
 @router.get("/cameras/{camera_name}/snapshot", summary="Get the latest Frigate snapshot")
@@ -89,6 +112,15 @@ async def negotiate_webrtc(
 
     settings = get_settings()
     base_url = settings.go2rtc_url.rstrip("/")
+    if settings.auth_enabled or request.headers.get("x-playback-grant"):
+        try:
+            claims = jwt.decode(request.headers.get("x-playback-grant", ""), settings.jwt_secret,
+                algorithms=[settings.jwt_algorithm], audience="camera-playback",
+                options={"require": ["sub", "exp", "camera_id", "property_id", "aud"]})
+            if claims["sub"] != principal.subject or claims["camera_id"] != camera.id or claims["property_id"] != camera.property_id:
+                raise ValueError("Grant binding mismatch")
+        except (jwt.InvalidTokenError, ValueError, TypeError):
+            raise HTTPException(401, "Playback grant expired or invalid") from None
     url = f"{base_url}/api/webrtc"
     content_type = request.headers.get("content-type", "application/sdp")
     try:

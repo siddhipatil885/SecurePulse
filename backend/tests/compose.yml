@@ -1,0 +1,53 @@
+name: securepulse-p4-tests
+services:
+  sample-gateway:
+    image: bluenviron/mediamtx:1.9.3
+    profiles: [stream]
+  sample-stream:
+    build:
+      context: .
+      dockerfile: stream.Dockerfile
+    restart: on-failure
+    profiles: [stream]
+    depends_on: [sample-gateway]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: securepulse
+      POSTGRES_PASSWORD: test-only-password
+      POSTGRES_DB: securepulse_test
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U securepulse -d securepulse_test]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  fixtures:
+    build: ..
+    command: [uvicorn, tests.fixtures.services:app, --host, 0.0.0.0, --port, '8100']
+  backend:
+    build: ..
+    environment: &test-env
+      DATABASE_URL: postgresql://securepulse:test-only-password@postgres:5432/securepulse_test
+      AUTH_ENABLED: 'true'
+      JWT_SECRET: isolated-p4-test-signing-secret-at-least-32-characters
+      MQTT_HOST: mqtt
+      SECURITY_ENGINE_URL: http://fixtures:8100
+      SECURITY_ENGINE_FAILURE_MODE: REJECT
+      USE_LOCAL_SECURITY_ENGINE: 'false'
+    depends_on:
+      postgres: {condition: service_healthy}
+      mqtt: {condition: service_started}
+      fixtures: {condition: service_started}
+  tests:
+    build: ..
+    environment:
+      <<: *test-env
+      RUN_STACK_TESTS: '1'
+    command: [python, -m, pytest, -q, tests/integration/test_dashboard_stack.py]
+    depends_on:
+      backend: {condition: service_started}

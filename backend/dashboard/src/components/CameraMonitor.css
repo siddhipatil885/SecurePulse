@@ -35,6 +35,7 @@
 .secondary-camera-item:hover {
   border-color: var(--text-muted);
 }
+.select-camera { position: absolute; right: 8px; top: 42px; z-index: 20; font-size: .7rem; }
 
 @media (min-width: 1024px) {
   .camera-monitor-container {

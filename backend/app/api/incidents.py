@@ -10,6 +10,7 @@ from app.core.dependencies import (
     get_event_service,
     get_incident_service,
     get_mutation_rate_limiter,
+    get_event_publisher,
 )
 from app.core.exceptions import ApplicationError
 from app.core.rate_limit import SlidingWindowRateLimiter
@@ -98,7 +99,7 @@ async def incident_command(
     principal: Principal = Depends(mutation_principal),
     service: IncidentService = Depends(get_incident_service),
 ) -> EventResponse:
-    return await service.command(
+    incident = await service.command(
         incident_id,
         command.command,
         actor_subject=principal.subject,
@@ -106,3 +107,6 @@ async def incident_command(
         reason=command.reason,
         correlation_id=command.correlation_id,
     )
+    # Service returns only after the transition/history transaction commits.
+    await get_event_publisher().publish(incident)
+    return incident

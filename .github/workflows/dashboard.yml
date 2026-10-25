@@ -1,0 +1,49 @@
+name: Dashboard and integration quality
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend/dashboard
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+          cache-dependency-path: backend/dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dashboard-browser-evidence
+          path: |
+            backend/dashboard/playwright-report
+            backend/dashboard/test-results
+  broker-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - run: docker compose -f backend/tests/compose.yml --profile stream config --quiet
+      - run: docker compose -f backend/tests/compose.yml up --build --abort-on-container-exit --exit-code-from tests
+      - if: always()
+        run: docker compose -f backend/tests/compose.yml logs --no-color > p4-integration.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p4-broker-integration-evidence
+          path: p4-integration.log
+      - if: always()
+        run: docker compose -f backend/tests/compose.yml down --volumes

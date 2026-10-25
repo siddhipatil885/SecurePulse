@@ -4,18 +4,26 @@ export interface Camera {
   frigateCameraName: string;
   status: 'enabled' | 'disabled';
   lastSeen: string;
+  propertyId: number;
+  location: string | null;
+  health: 'healthy' | 'degraded' | 'offline' | 'unknown';
 }
 
 export interface SecurityEvent {
   id: string;
   cameraId: string;
   type: string;
+  propertyId: number;
+  reason?: string | null;
+  zone?: string | null;
+  sourceId?: string | null;
+  createdAt?: string | null;
   objectType?: string;
   timestamp: string;
   confidence?: number;
   severity?: string;
   status?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SecurityAlert {

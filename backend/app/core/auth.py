@@ -118,14 +118,22 @@ def require_scope(scope: str) -> Callable[..., Principal]:
     return dependency
 
 
+def websocket_token(websocket: WebSocket) -> str | None:
+    """Browser subprotocol keeps credentials out of URL/access logs."""
+    authorization = websocket.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        return authorization[7:].strip()
+    for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+        protocol = protocol.strip()
+        if protocol.startswith("bearer."):
+            return protocol[7:]
+    return websocket.query_params.get("access_token")  # legacy clients
+
+
 async def get_websocket_principal(websocket: WebSocket) -> Principal:
     """Authenticate WebSocket clients using a bearer header or browser token query."""
 
-    authorization = websocket.headers.get("authorization", "")
-    token = authorization.removeprefix("Bearer ").strip() if authorization else None
-    if not token:
-        token = websocket.query_params.get("access_token")
-    principal = authenticate_token(token)
+    principal = authenticate_token(websocket_token(websocket))
     if "read" not in principal.scopes:
         raise ApplicationError("FORBIDDEN", "Read permission is required.", 403)
     return principal

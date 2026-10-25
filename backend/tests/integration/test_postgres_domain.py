@@ -47,7 +47,7 @@ def postgres_schema():
             config = Config("alembic.ini")
             config.attributes["connection"] = connection
             command.upgrade(config, "head")
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_event_camera_cascade"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_reporter_credentials"
         yield url, schema, engine
     finally:
         with engine.begin() as connection:

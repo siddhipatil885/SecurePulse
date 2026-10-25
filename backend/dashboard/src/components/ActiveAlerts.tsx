@@ -22,10 +22,10 @@ const ActiveAlerts: React.FC<ActiveAlertsProps> = ({ alerts }) => {
               return (
                 <div key={alert.id} className="alert-item">
                   <div className={`alert-severity ${alert.severity}`}>
-                    {alert.severity.toUpperCase()}
+                    {alert.severity === 'warning' ? 'HIGH' : alert.severity.toUpperCase()}
                   </div>
                   <div className="alert-details">
-                    <div className="alert-type">{alert.type}</div>
+                    <div className="alert-type">{alert.type} · {alert.status === 'acknowledged' ? 'Acknowledged' : 'Awaiting acknowledgment'}</div>
                     <div className="alert-meta">
                       <span className="alert-camera">{alert.cameraId}</span>
                       <span className="alert-time">{time}</span>

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.dashboard import router as dashboard_router
 from app.api.cameras import router as cameras_router
 from app.api.events import router as events_router
 from app.api.frigate import router as frigate_router
@@ -163,6 +164,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health_router)
+    app.include_router(dashboard_router, prefix="/api/v1")
     app.include_router(cameras_router, prefix="/api/v1")
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(frigate_router, prefix="/api/v1")

@@ -126,7 +126,7 @@ async def test_webrtc_offer_uses_enabled_camera_mapping(monkeypatch: pytest.Monk
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
         "app.api.frigate.get_settings",
-        lambda: SimpleNamespace(go2rtc_url="http://go2rtc:1984"),
+        lambda: SimpleNamespace(go2rtc_url="http://go2rtc:1984", auth_enabled=False),
     )
     monkeypatch.setattr(
         "app.api.frigate.httpx.AsyncClient",

@@ -1,0 +1,17 @@
+{
+  "type": "new",
+  "after": {
+    "id": "p4-person-zone-001",
+    "camera": "p4_camera_north",
+    "label": "person",
+    "top_score": 0.94,
+    "start_time": 1792886400,
+    "box": [192, 108, 576, 648],
+    "frame_width": 1920,
+    "frame_height": 1080,
+    "current_zones": ["restricted"],
+    "entered_zones": ["restricted"],
+    "has_snapshot": false,
+    "has_clip": false
+  }
+}

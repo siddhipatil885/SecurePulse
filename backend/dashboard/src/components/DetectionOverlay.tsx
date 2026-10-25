@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useState } from 'react';
 import type { PersonTrack } from '../types';
 import './DetectionOverlay.css';
+import { projectBox } from '../geometry';
 
 interface DetectionOverlayProps {
   video: HTMLVideoElement | null;
@@ -33,21 +34,8 @@ function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[], f
     const sourceWidth = video.videoWidth || track.frameWidth;
     const sourceHeight = video.videoHeight || track.frameHeight;
     if (!sourceWidth || !sourceHeight) return [];
-    const scale = fitMode === 'contain'
-      ? Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight)
-      : Math.max(containerWidth / sourceWidth, containerHeight / sourceHeight);
-    const renderedWidth = sourceWidth * scale;
-    const renderedHeight = sourceHeight * scale;
-    const offsetX = (containerWidth - renderedWidth) / 2;
-    const offsetY = (containerHeight - renderedHeight) / 2;
-    const box = track.boundingBox;
-    return [{
-      track,
-      left: offsetX + box.x * renderedWidth,
-      top: offsetY + box.y * renderedHeight,
-      width: box.width * renderedWidth,
-      height: box.height * renderedHeight,
-    }];
+    const box = projectBox(track.boundingBox, sourceWidth, sourceHeight, containerWidth, containerHeight, fitMode);
+    return box ? [{ track, ...box }] : [];
   });
 }
 

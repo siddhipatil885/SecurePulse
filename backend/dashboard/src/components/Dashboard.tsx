@@ -1,151 +1,155 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Header from './Header';
 import CameraMonitor from './CameraMonitor';
 import SecuritySummary from './SecuritySummary';
 import ActiveAlerts from './ActiveAlerts';
 import RecentEvents from './RecentEvents';
 import CameraStatus from './CameraStatus';
-import { fetchDashboardData, mapAlert, mapEvent, mapTrack } from '../api';
-import type { Camera, PersonTrack, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
+import IncidentDetail from './IncidentDetail';
+import Operations from './Operations';
+import { ApiError, fetchDashboardData, setAccessToken, socketProtocols, socketUrl } from '../api';
+import type { DashboardData } from '../api';
+import type { SystemStatus } from '../types';
 import './Dashboard.css';
 
 const Dashboard: React.FC = () => {
-  const [cameras, setCameras] = useState<Camera[]>([]);
-  const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
-  const [events, setEvents] = useState<SecurityEvent[]>([]);
-  const [tracksByCamera, setTracksByCamera] = useState<Record<string, PersonTrack[]>>({});
-  const [loading, setLoading] = useState(true);
+  const [generation, setGeneration] = useState(0);
+  const [token, setToken] = useState('');
+  const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [streamConnected, setStreamConnected] = useState(false);
-  
-  const [primaryCameraId, setPrimaryCameraId] = useState<string | null>(null);
+  const [connection, setConnection] = useState('Connecting');
+  const [propertyId, setPropertyId] = useState('');
+  const [selectedCamera, setSelectedCamera] = useState<string | null>(null);
+  const [incidentId, setIncidentId] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState('');
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    let active = true;
-    fetchDashboardData()
-      .then((data) => {
-        if (!active) return;
-        setCameras(data.cameras);
-        setAlerts(data.alerts);
-        setEvents(data.events);
-        setTracksByCamera(data.tracksByCamera);
-        setPrimaryCameraId((current) => current ?? data.cameras[0]?.id ?? null);
-      })
-      .catch((requestError: unknown) => {
-        if (active) {
-          setError(requestError instanceof Error ? requestError.message : 'Unable to load dashboard data');
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const socketUrl = import.meta.env.VITE_WS_URL
-      ?? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/events/stream`;
-    const socket = new WebSocket(socketUrl);
-
-    socket.onopen = () => {
-      if (active) setStreamConnected(true);
-    };
-
-    socket.onmessage = (message) => {
+    let disposed = false, loading = false, dirty = false, attempts = 0, stopped = false;
+    let socket: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let throttle: ReturnType<typeof setTimeout> | undefined;
+    let lastMessage = Date.now();
+    const abort = new AbortController();
+    const seen = new Set<string>();
+    const announced = new Set<string>();
+    let baseline = false;
+    const refresh = async () => {
+      if (disposed || stopped) return;
+      if (loading) { dirty = true; return; }
+      loading = true;
       try {
-        const payload = JSON.parse(message.data) as {
-          type?: string;
-          data?: Parameters<typeof mapEvent>[0];
-        };
-        if (payload.type === 'person_tracks' && payload.data) {
-          const trackData = payload.data as unknown as { camera_id: string; tracks: Parameters<typeof mapTrack>[0][] };
-          setTracksByCamera((current) => ({ ...current, [String(trackData.camera_id)]: trackData.tracks.map(mapTrack) }));
-          return;
+        const next = await fetchDashboardData(AbortSignal.any([abort.signal, AbortSignal.timeout(20000)]));
+        if (disposed) return;
+        for (const alert of next.alerts) {
+          if (baseline && !announced.has(alert.id) && alert.status === 'active') setNotice(`Incident ${alert.id}: ${alert.type} — awaiting acknowledgment`);
+          announced.add(alert.id);
         }
-        if (payload.type !== 'security_event' || !payload.data) return;
-        const incoming = mapEvent(payload.data);
-        setEvents((current) => [
-          incoming,
-          ...current.filter((event) => event.id !== incoming.id),
-        ].slice(0, 100));
-        setAlerts((current) => {
-          const isAlert = ['high', 'critical'].includes(incoming.severity?.toLowerCase() ?? '');
-          if (!isAlert) return current.filter((alert) => alert.id !== incoming.id);
-          return [mapAlert(incoming), ...current.filter((alert) => alert.id !== incoming.id)].slice(0, 100);
-        });
-      } catch {
-        setError('Received an invalid live event from the backend');
+        baseline = true;
+        setData(next); setError(null); setUpdatedAt(new Date().toISOString());
+      } catch (e) {
+        if (disposed) return;
+        setData(null);
+        setNotice('');
+        if (e instanceof ApiError && [401, 403].includes(e.status)) {
+          stopped = true; socket?.close(); setConnection('Sign in required');
+        }
+        setError(e instanceof Error ? e.message : 'Backend unavailable');
+      } finally {
+        loading = false;
+        if (dirty && !disposed) { dirty = false; scheduleRefresh(); }
       }
     };
-
-    socket.onerror = () => {
-      if (active) setStreamConnected(false);
+    const scheduleRefresh = () => {
+      if (throttle || disposed) return;
+      throttle = setTimeout(() => { throttle = undefined; void refresh(); }, 1000);
     };
-    socket.onclose = () => {
-      if (active) setStreamConnected(false);
+    const connect = () => {
+      if (disposed || stopped) return;
+      setConnection(attempts ? 'Connection lost; retrying' : 'Connecting');
+      try { socket = new WebSocket(socketUrl(), socketProtocols()); }
+      catch { setConnection('Invalid realtime configuration; REST polling active'); return; }
+      socket.onopen = () => { lastMessage = Date.now(); if (!disposed) { setConnection('Connected'); void refresh(); } };
+      socket.onmessage = message => {
+        if (disposed) return;
+        lastMessage = Date.now();
+        try {
+          const event = JSON.parse(String(message.data)) as { version?: number; type?: string; event_id?: string };
+          if (event.version !== 1) { scheduleRefresh(); return; }
+          if (event.type === 'heartbeat') { attempts = 0; return; }
+          if (event.event_id && seen.has(event.event_id)) return;
+          if (event.event_id) { seen.add(event.event_id); if (seen.size > 1000) seen.delete(seen.values().next().value!); }
+          scheduleRefresh(); // REST remains the authoritative state and permission check
+        } catch { setConnection('Invalid live message; refreshing'); scheduleRefresh(); }
+      };
+      socket.onclose = event => {
+        if (disposed || stopped) return;
+        if ([4401, 1008].includes(event.code)) { stopped = true; setData(null); setError('Session expired or access denied. Sign in again.'); setConnection('Sign in required'); return; }
+        setConnection('Connection lost; retrying');
+        if (++attempts <= 6) retry = setTimeout(connect, Math.min(30000, 1000 * 2 ** (attempts - 1)) + Math.random() * 250);
+        else setConnection('Realtime offline; polling every 15 seconds. Use Retry to reconnect.');
+      };
+      const currentSocket = socket;
+      socket.onerror = () => currentSocket.close();
     };
-    return () => {
-      active = false;
-      socket.close();
-    };
-  }, []);
+    void refresh(); connect();
+    const poll = setInterval(() => {
+      if (socket?.readyState === WebSocket.OPEN && Date.now() - lastMessage > 35000) socket.close();
+      void refresh();
+    }, 15000);
+    return () => { disposed = true; abort.abort(); clearInterval(poll); clearTimeout(retry); clearTimeout(throttle); socket?.close(); };
+  }, [generation]);
 
-  const primaryCamera = useMemo(() => cameras.find(c => c.id === primaryCameraId) ?? cameras[0], [cameras, primaryCameraId]);
-
-  // The secondary cameras should be the next two in priority, or just the first two available
-  // Exclude the primary camera.
-  const secondaryCameras = useMemo(() => {
-    return cameras.filter(c => c.id !== primaryCamera?.id).slice(0, 2);
-  }, [cameras, primaryCamera]);
-
-  const systemStatus: SystemStatus = useMemo(() => ({
-    online: !error && streamConnected,
-    activeAlerts: alerts.filter(a => a.status === 'active').length,
-    criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
-    camerasOnline: cameras.filter(c => c.status === 'enabled').length,
-    totalCameras: cameras.length,
-    // Keep a temporarily-lost track in the operator count for the configured
-    // grace period; it has not yet become a departed person/session.
-    peopleDetected: Object.values(tracksByCamera).flat().length
-  }), [alerts, cameras, error, streamConnected, tracksByCamera]);
-
-  const handleSelectCamera = (cameraId: string) => {
-    setPrimaryCameraId(cameraId);
+  const cameras = useMemo(() => data?.cameras.filter(c => !propertyId || String(c.propertyId) === propertyId) ?? [], [data, propertyId]);
+  const events = useMemo(() => data?.events.filter(e => !propertyId || String(e.propertyId) === propertyId) ?? [], [data, propertyId]);
+  const alerts = data?.alerts.filter(a => cameras.some(c => c.id === a.cameraId)) ?? [];
+  const activity = [...events].sort((a, b) => {
+    const active = (s?: string) => ['OPEN', 'ACKNOWLEDGED'].includes(s ?? '') ? 1 : 0;
+    return active(b.status) - active(a.status) || Date.parse(b.timestamp) - Date.parse(a.timestamp);
+  });
+  const primary = cameras.find(c => c.id === selectedCamera) ?? cameras.find(c => c.id === activity[0]?.cameraId) ?? cameras.find(c => c.health === 'healthy') ?? cameras[0];
+  const status: SystemStatus = {
+    online: !!data && connection === 'Connected', activeAlerts: alerts.length,
+    criticalAlerts: alerts.filter(a => a.severity === 'critical').length,
+    camerasOnline: cameras.filter(c => c.health === 'healthy').length, totalCameras: cameras.length,
+    peopleDetected: cameras.reduce((sum, c) => sum + (data?.tracksByCamera[c.id]?.length ?? 0), 0),
   };
-
-  return (
-    <div className="dashboard-container">
-      <Header status={systemStatus} />
-      
-      <main className="dashboard-main">
-        {loading && <div className="empty-state">Loading dashboard data...</div>}
-        {error && <div className="empty-state">Unable to load dashboard data: {error}</div>}
-        {!loading && !error && !primaryCamera && <div className="empty-state">No cameras are configured.</div>}
-        {!loading && !error && primaryCamera && (
-          <>
-        <div className="dashboard-center-section">
-          <CameraMonitor 
-            primaryCamera={primaryCamera} 
-            secondaryCameras={secondaryCameras} 
-            onSelectCamera={handleSelectCamera}
-            tracksByCamera={tracksByCamera}
-          />
+  return <div className="dashboard-container" id="dashboard">
+    <Header status={status} />
+    <div className="dashboard-toolbar">
+      <form onSubmit={e => { e.preventDefault(); setAccessToken(token.trim()); setToken(''); setData(null); setIncidentId(null); setNotice(''); setPropertyId(''); setGeneration(g => g + 1); }}>
+        <label>Access token <input aria-label="Access token" type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} /></label>
+        <button type="submit">Use session</button>
+      </form>
+      <button onClick={() => { setAccessToken(''); setData(null); setIncidentId(null); setNotice(''); setGeneration(g => g + 1); }}>Clear session</button>
+      <label>Property <select aria-label="Property" value={propertyId} onChange={e => { setPropertyId(e.target.value); setSelectedCamera(null); setIncidentId(null); }}>
+        <option value="">All authorized properties</option>
+        {data?.properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select></label>
+      <button onClick={() => setGeneration(g => g + 1)}>Retry</button>
+      <span role="status">{connection} · Last REST update: {updatedAt ? new Date(updatedAt).toLocaleString() : 'Unknown'}</span>
+    </div>
+    {notice && <div className="dashboard-notice" role="alert">{notice} <button onClick={() => setNotice('')}>Dismiss notification</button></div>}
+    <main className="dashboard-main">
+      {error && <div className="empty-state" role="alert">{error}. Data unavailable.</div>}
+      {!data && !error && <div className="empty-state">Loading dashboard data…</div>}
+      {data && <>
+        <div className="dashboard-center-section" id="cameras">
+          {primary ? <CameraMonitor primaryCamera={primary} secondaryCameras={cameras.filter(c => c.id !== primary.id).slice(0, 2)} onSelectCamera={setSelectedCamera} tracksByCamera={data.tracksByCamera} /> : <div className="empty-state">No authorized cameras.</div>}
+          <label>Active camera <select aria-label="Active camera" value={primary?.id ?? ''} onChange={e => setSelectedCamera(e.target.value)}>{cameras.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <Operations generation={generation} />
         </div>
-        
         <div className="dashboard-right-sidebar">
-          <SecuritySummary status={systemStatus} />
-          <ActiveAlerts alerts={alerts} />
-          <RecentEvents events={events} />
+          <p>Counts: all retained authorized incidents in the selected property. Tracks: latest asynchronous observations.</p>
+          <SecuritySummary status={status} />
+          <div id="alerts"><ActiveAlerts alerts={alerts} /></div>
+          <div id="events"><RecentEvents events={events.slice(0, 100)} onSelect={setIncidentId} /></div>
+          {events.length > 100 && <p>Showing latest 100 of {events.length} retained incidents.</p>}
+          {incidentId && events.some(e => e.id === incidentId) && <IncidentDetail key={incidentId} id={incidentId} revision={updatedAt} canWrite={data.session.scopes.includes('write')} onClose={() => setIncidentId(null)} onChange={() => setGeneration(g => g + 1)} />}
           <CameraStatus cameras={cameras} />
         </div>
-          </>
-        )}
-      </main>
-    </div>
-  );
+      </>}
+    </main>
+  </div>;
 };
-
 export default Dashboard;
