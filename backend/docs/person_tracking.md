@@ -68,7 +68,7 @@ default keeps the pre-existing external-engine contract unchanged.
 Run these checks from the repository root:
 
 ```powershell
-py -m pytest backend/tests -q -p no:cacheprovider
+py -m pytest tests -q -p no:cacheprovider
 cd dashboard
 npm run build
 npm run lint

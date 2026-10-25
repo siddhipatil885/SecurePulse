@@ -2,7 +2,7 @@
 
 This directory contains the active FastAPI backend for SecurePulse.
 
-For the full architecture, feature overview, and project setup, see the canonical project guide in [../README.md](../README.md).
+For the full architecture, feature overview, and project setup, see the canonical project guide in [PROJECT_README.md](PROJECT_README.md).
 
 ## Backend-specific setup
 

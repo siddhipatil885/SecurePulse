@@ -1,0 +1,14 @@
+import { z } from 'zod';
+export const propertySchema = z.object({ id: z.number().int().positive(), name: z.string(), role: z.enum(['owner', 'reporter']) });
+export const profileSchema = z.object({ id: z.number().int().positive(), email: z.string(), name: z.string(), properties: z.array(propertySchema) });
+export const tokenSchema = z.object({ access_token: z.string().min(1), token_type: z.literal('bearer'), expires_at: z.string().datetime({ offset: true }) });
+export const cameraSchema = z.object({ id: z.number().int(), name: z.string(), location: z.string().nullable(), enabled: z.boolean(), connection_status: z.literal('unknown') });
+export const eventSchema = z.object({ id: z.number().int(), camera_id: z.number().int(), event_type: z.string(), object_type: z.string(), confidence: z.number(), timestamp: z.string(), severity: z.string(), status: z.string(), reason: z.string().nullable(), zone: z.string().nullable() });
+export const eventPageSchema = z.object({ items: z.array(eventSchema), page: z.number().int().positive(), page_size: z.number().int().positive(), total: z.number().int().nonnegative() });
+export const summarySchema = z.object({ camera_count: z.number().int().nonnegative(), event_count: z.number().int().nonnegative(), active_alert_count: z.number().int().nonnegative(), connected_camera_count: z.number().nullable(), active_incident_count: z.number().nullable(), security_status: z.literal('unknown') });
+export type Profile = z.infer<typeof profileSchema>;
+export type PropertyAccess = z.infer<typeof propertySchema>;
+export type Token = z.infer<typeof tokenSchema>;
+export type Camera = z.infer<typeof cameraSchema>;
+export type SecurityEvent = z.infer<typeof eventSchema>;
+export type EventPage = z.infer<typeof eventPageSchema>;
