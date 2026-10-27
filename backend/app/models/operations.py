@@ -78,6 +78,9 @@ class NotificationOutbox(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    destination: Mapped[str | None] = mapped_column(String(255))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_by: Mapped[str | None] = mapped_column(String(128))
 
     attempts = relationship("NotificationAttempt", back_populates="outbox", cascade="all, delete-orphan")
 
@@ -93,6 +96,8 @@ class NotificationAttempt(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_reference: Mapped[str | None] = mapped_column(String(255))
     error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(String(1000))
+    response_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     outbox = relationship("NotificationOutbox", back_populates="attempts")
@@ -141,6 +146,7 @@ class Assignment(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
 
     events = relationship("AssignmentEvent", back_populates="assignment", cascade="all, delete-orphan")
 

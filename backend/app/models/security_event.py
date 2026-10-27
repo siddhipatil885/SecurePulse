@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,7 +39,8 @@ class SecurityEvent(Base):
     incident_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(1000))
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSONB, default=dict, server_default="{}", nullable=False
+        "metadata", JSONB().with_variant(JSON(), "sqlite"), default=dict,
+        server_default="{}", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
