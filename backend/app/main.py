@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import queue
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -38,18 +39,25 @@ logger = logging.getLogger(__name__)
 # Global state for MQTT listener and related services
 _frigate_listener: FrigateListener | None = None
 _mqtt_connected = False
+_mqtt_event_queue: queue.Queue[DetectionEvent] | None = None
+_mqtt_queue_rejections = 0
+_mqtt_processing_failures = 0
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Initialize MQTT listener and manage application lifecycle."""
 
-    global _frigate_listener, _mqtt_connected
+    global _frigate_listener, _mqtt_connected, _mqtt_event_queue
+    global _mqtt_queue_rejections, _mqtt_processing_failures
     settings = get_settings()
     # Uvicorn can configure its own handlers after the app was imported.
     configure_logging(settings.log_level)
     logger.info("Application startup", extra={"app_name": settings.app_name})
     event_loop = asyncio.get_running_loop()
+    _mqtt_event_queue = queue.Queue(maxsize=settings.mqtt_event_queue_size)
+    _mqtt_queue_rejections = 0
+    _mqtt_processing_failures = 0
     track_reaper_task: asyncio.Task[None] | None = None
     
     # Initialize MQTT listener
@@ -66,6 +74,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         
         async def on_detection_async(detection: DetectionEvent) -> None:
             """Async wrapper for detection processing."""
+            global _mqtt_processing_failures
             try:
                 async with session_factory() as session:
                     camera_repo = CameraRepository(session)
@@ -97,16 +106,56 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                         },
                     )
             except Exception as error:
-                logger.error("Failed to process detection", extra={"error": str(error)}, exc_info=True)
+                _mqtt_processing_failures += 1
+                logger.error(
+                    "Failed to process Frigate detection",
+                    extra={
+                        "source_event_id": detection.source_event_id,
+                        "camera": detection.camera,
+                        "stage": "event_processor",
+                        "reason": str(error),
+                    },
+                    exc_info=True,
+                )
         
         def on_detection(detection: DetectionEvent) -> None:
-            """Synchronous callback wrapper that schedules async processing."""
+            """Put bounded work on a thread-safe queue without blocking Paho."""
+            global _mqtt_queue_rejections
+            assert _mqtt_event_queue is not None
             try:
-                event_loop.call_soon_threadsafe(
-                    event_loop.create_task, on_detection_async(detection)
+                _mqtt_event_queue.put_nowait(detection)
+            except queue.Full:
+                _mqtt_queue_rejections += 1
+                logger.error(
+                    "Frigate event queue is full; event rejected",
+                    extra={
+                        "source_event_id": detection.source_event_id,
+                        "camera": detection.camera,
+                        "reason": "queue_full",
+                    },
                 )
-            except RuntimeError:
-                logger.warning("Event loop closed before Frigate detection could be processed")
+            else:
+                logger.debug(
+                    "Queued Frigate event",
+                    extra={
+                        "source_event_id": detection.source_event_id,
+                        "camera": detection.camera,
+                        "queue_depth": _mqtt_event_queue.qsize(),
+                        "stage": "queued",
+                    },
+                )
+
+        async def process_detection_queue() -> None:
+            assert _mqtt_event_queue is not None
+            while True:
+                try:
+                    detection = await asyncio.to_thread(_mqtt_event_queue.get, True, 1.0)
+                except queue.Empty:
+                    continue
+                try:
+                    await on_detection_async(detection)
+                finally:
+                    _mqtt_event_queue.task_done()
         
         _frigate_listener = FrigateListener(on_detection=on_detection, settings=settings)
         _mqtt_connected = _frigate_listener.start()
@@ -125,6 +174,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                     )
 
         track_reaper_task = asyncio.create_task(expire_lost_tracks())
+        detection_worker_task = asyncio.create_task(process_detection_queue())
     except Exception as error:
         logger.error("Failed to initialize MQTT listener", extra={"error": str(error)}, exc_info=True)
     
@@ -140,6 +190,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await track_reaper_task
         except asyncio.CancelledError:
             pass
+    if "detection_worker_task" in locals():
+        if _mqtt_event_queue is not None:
+            try:
+                await asyncio.wait_for(asyncio.to_thread(_mqtt_event_queue.join), timeout=10)
+            except TimeoutError:
+                logger.error(
+                    "Timed out draining Frigate events at shutdown",
+                    extra={"queue_depth": _mqtt_event_queue.qsize()},
+                )
+        detection_worker_task.cancel()
+        try:
+            await detection_worker_task
+        except asyncio.CancelledError:
+            pass
+    _mqtt_event_queue = None
     
     await dispose_database()
     logger.info("Application shutdown")

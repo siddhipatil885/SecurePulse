@@ -6,18 +6,16 @@
   z-index: 5;
 }
 
-.person-box {
+.detection-box {
   position: absolute;
   box-sizing: border-box;
-  border: 2px solid #2ce6a6;
+  border: 2px solid var(--detection-color, #ffd166);
   border-radius: 2px;
   min-width: 2px;
   min-height: 2px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 10px rgba(44, 230, 166, .45);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 10px color-mix(in srgb, var(--detection-color, #ffd166) 45%, transparent);
   transition: left 110ms linear, top 110ms linear, width 110ms linear, height 110ms linear;
 }
-
-.person-box.lost { border-style: dashed; opacity: .7; }
 
 .person-box-label, .person-box-debug {
   position: absolute;
@@ -26,7 +24,7 @@
   white-space: nowrap;
   padding: 3px 6px;
   color: #03130e;
-  background: #2ce6a6;
+  background: var(--detection-color, #ffd166);
   font: 600 11px/1.1 monospace;
 }
 

@@ -1,16 +1,18 @@
 services:
   frigate:
-    container_name: frigate
-    privileged: true
+    # Legacy standalone path retained for existing installs. The canonical
+    # stack is ../deployment/docker-compose.yml; this is opt-in to avoid two
+    # Frigate instances and published-port conflicts.
+    profiles: ["legacy-standalone"]
     restart: unless-stopped
-    image: ghcr.io/blakeblackshear/frigate:stable
+    image: ghcr.io/blakeblackshear/frigate:0.18.2
     shm_size: "256mb"
 
     ports:
-      - "8971:8971"
-      - "8554:8554"
-      - "8556:8555/tcp"
-      - "8556:8555/udp"
+      - "127.0.0.1:18971:8971"
+      - "127.0.0.1:28554:8554"
+      - "127.0.0.1:28556:8555/tcp"
+      - "127.0.0.1:28556:8555/udp"
 
     volumes:
       - ./config:/config

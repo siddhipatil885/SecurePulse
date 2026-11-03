@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     jwt_issuer: str | None = Field(default=None, validation_alias="JWT_ISSUER")
     mqtt_host: str = Field(default="localhost", validation_alias="MQTT_HOST")
     mqtt_port: int = Field(default=1883, ge=1, le=65535, validation_alias="MQTT_PORT")
+    mqtt_username: str | None = Field(default=None, validation_alias="MQTT_USERNAME")
+    mqtt_password: str | None = Field(default=None, validation_alias="MQTT_PASSWORD")
+    mqtt_event_queue_size: int = Field(
+        default=256, ge=1, le=10000, validation_alias="MQTT_EVENT_QUEUE_SIZE"
+    )
     frigate_mqtt_topic: str = Field(
         default="frigate/events", validation_alias="FRIGATE_MQTT_TOPIC"
     )
@@ -91,6 +96,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_authentication_configuration(self) -> "Settings":
+        if bool(self.mqtt_username) != bool(self.mqtt_password):
+            raise ValueError("MQTT_USERNAME and MQTT_PASSWORD must be configured together")
         if self.auth_enabled and len(self.jwt_secret) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters when authentication is enabled")
         if self.app_env == "production" and not self.auth_enabled:

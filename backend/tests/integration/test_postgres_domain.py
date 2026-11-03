@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, select, func, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -47,7 +48,11 @@ def postgres_schema():
             config = Config("alembic.ini")
             config.attributes["connection"] = connection
             command.upgrade(config, "head")
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_event_camera_cascade"
+            expected_revision = ScriptDirectory.from_config(config).get_current_head()
+            actual_revision = connection.scalar(
+                text("SELECT version_num FROM alembic_version")
+            )
+            assert actual_revision == expected_revision
         yield url, schema, engine
     finally:
         with engine.begin() as connection:

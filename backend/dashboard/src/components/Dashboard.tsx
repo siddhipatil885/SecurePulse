@@ -107,9 +107,12 @@ const Dashboard: React.FC = () => {
     criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
     camerasOnline: cameras.filter(c => c.status === 'enabled').length,
     totalCameras: cameras.length,
-    // Keep a temporarily-lost track in the operator count for the configured
-    // grace period; it has not yet become a departed person/session.
-    peopleDetected: Object.values(tracksByCamera).flat().length
+    // This is a count of active anonymous person tracks, not historical events
+    // or unique identities. Ended/grace-period tracks are excluded by design.
+    peopleDetected: Object.values(tracksByCamera)
+      .flat()
+      .filter((track) => track.objectType === 'person' && track.state === 'ACTIVE')
+      .length
   }), [alerts, cameras, error, streamConnected, tracksByCamera]);
 
   const handleSelectCamera = (cameraId: string) => {

@@ -1,0 +1,10 @@
+# Frigate publishes source events; it cannot read or publish arbitrary topics.
+user frigate
+topic write frigate/#
+topic read frigate/+/+/set
+
+# The backend consumes event and availability state, and cannot publish upstream.
+user securepulse
+topic read frigate/events
+topic read frigate/available
+topic read $SYS/broker/uptime

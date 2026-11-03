@@ -143,9 +143,12 @@ class PersonTracker:
         ]
         return sorted(tracks, key=lambda track: (str(track["first_seen"]), str(track["track_id"])))
 
-    def snapshot(self) -> dict[str, list[dict[str, Any]]]:
+    def snapshot(self, *, include_lost: bool = False) -> dict[str, list[dict[str, Any]]]:
         cameras = {track.camera_id for track in self._tracks.values()}
-        return {camera_id: self.tracks_for_camera(camera_id) for camera_id in cameras}
+        return {
+            camera_id: self.tracks_for_camera(camera_id, include_lost=include_lost)
+            for camera_id in cameras
+        }
 
     def _normalised_bbox(self, detection: DetectionEvent) -> tuple[dict[str, float] | None, int, int]:
         width = self._positive_int(detection.metadata.get("frame_width"), self.default_frame_width)
