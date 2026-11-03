@@ -84,4 +84,35 @@ pytest
 alembic upgrade head
 ```
 
+## Marshal dispatch persistence
+
+The tenancy migration introduced property-scoped marshal profiles, assignments,
+assignment events, a durable notification outbox, and delivery-attempt receipts.
+Migration `0011_dispatch_orchestration` completes their worker/idempotency fields
+and enforces append-only assignment events. A `SecurityEvent` is the incident anchor.
+Only property `owner`/`dispatcher` memberships may create, expire, or cancel an
+offer; only its assigned `marshal` may accept or decline it. Marshal eligibility
+requires an enabled account, marshal membership and service mapping, on-duty and
+available flags observed within five minutes, and unused assignment capacity.
+
+Dispatch endpoints are under `/api/v1/dispatch`:
+
+- `PUT /marshal/availability`
+- `GET /eligible-marshals?property_id=...`
+- `POST /offers`
+- `POST /offers/{id}/accept`, `/decline`, `/expire`, or `/cancel`
+
+Offer creation writes the offer, history entry, and notification intent in one
+transaction. PostgreSQL row locks plus a partial unique index permit at most one
+`OFFERED` or `ACCEPTED` record per incident. `TimeoutEscalator` and
+`NotificationDispatcher` in `app/services/dispatch_workers.py` are scheduler-
+neutral `run_once` workers; deployment code should invoke them from its existing
+job runner. Provider calls occur after the outbox claim transaction commits, and
+each result is persisted as an attempt receipt in a new transaction.
+
+Provision marshal accounts with `--role marshal`; optional
+`--service-area` and `--max-active-assignments` arguments initialize eligibility.
+New marshals start off duty and unavailable and must publish availability before
+they can receive an offer.
+
 This backend is the authoritative runtime implementation for the project. Keep the root README as the single source of truth for high-level project documentation.

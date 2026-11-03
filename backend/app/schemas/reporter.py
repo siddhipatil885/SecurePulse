@@ -17,7 +17,7 @@ class TokenResponse(BaseModel):
 class PropertyAccess(BaseModel):
     id: int
     name: str
-    role: Literal["owner", "reporter"]
+    role: Literal["owner", "reporter", "dispatcher", "marshal"]
 
 
 class ReporterProfile(BaseModel):
