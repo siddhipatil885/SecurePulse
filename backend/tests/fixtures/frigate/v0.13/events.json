@@ -1,0 +1,51 @@
+[
+  {
+    "type": "new",
+    "before": {},
+    "after": {
+      "id": "sample-event-001",
+      "camera": "front_door",
+      "label": "person",
+      "top_score": 0.94,
+      "start_time": 1790105420.0,
+      "frame_time": 1790105420.0,
+      "box": [390, 289, 949, 717],
+      "zones": ["entrance"],
+      "has_snapshot": true,
+      "has_clip": false
+    }
+  },
+  {
+    "type": "update",
+    "before": {},
+    "after": {
+      "id": "sample-event-001",
+      "camera": "front_door",
+      "label": "person",
+      "top_score": 0.96,
+      "start_time": 1790105420.0,
+      "frame_time": 1790105421.0,
+      "box": [402, 291, 953, 719],
+      "zones": ["entrance"],
+      "has_snapshot": true,
+      "has_clip": false
+    }
+  },
+  {
+    "type": "end",
+    "before": {},
+    "after": {
+      "id": "sample-event-001",
+      "camera": "front_door",
+      "label": "person",
+      "top_score": 0.96,
+      "start_time": 1790105420.0,
+      "end_time": 1790105424.5,
+      "frame_time": 1790105424.5,
+      "box": [402, 291, 953, 719],
+      "zones": ["entrance"],
+      "has_snapshot": true,
+      "has_clip": false
+    }
+  }
+]

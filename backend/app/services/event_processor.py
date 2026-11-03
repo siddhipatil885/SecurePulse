@@ -393,7 +393,7 @@ class EventProcessor:
             return
         await self.publisher.publish_tracks(
             camera_id,
-            self.person_tracker.tracks_for_camera(camera_id),
+            self.person_tracker.tracks_for_camera(camera_id, include_lost=False),
             property_id,
         )
 

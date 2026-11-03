@@ -19,6 +19,12 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
   const setVideoRef = useCallback((element: HTMLVideoElement | null) => {
     setVideoElement(element);
   }, []);
+  const liveTracks = tracks.filter((track, index, all) =>
+    track.cameraId === camera.id
+    && track.objectType === 'person'
+    && track.state === 'ACTIVE'
+    && all.findIndex((candidate) => candidate.cameraId === camera.id && candidate.trackId === track.trackId) === index,
+  );
   
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -108,7 +114,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
         )}
         <DetectionOverlay
           video={videoElement}
-          tracks={tracks}
+          tracks={liveTracks}
           debug={import.meta.env.VITE_DEBUG_DETECTIONS === 'true'}
           fitMode={fitMode}
         />
@@ -130,7 +136,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
           {time.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}<br/>
           {time.toLocaleTimeString('en-GB')}
         </div>
-        <div className="people-count">Current people: {tracks.length}</div>
+        <div className="people-count">Current people: {liveTracks.length}</div>
       </div>
 
     </div>

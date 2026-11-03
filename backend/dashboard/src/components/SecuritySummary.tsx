@@ -10,7 +10,7 @@ const SecuritySummary: React.FC<SecuritySummaryProps> = ({ status }) => {
   return (
     <div className="security-summary-container">
       <div className="summary-item">
-        <div className="summary-label">People Detected</div>
+        <div className="summary-label">Live person tracks</div>
         <div className="summary-value">{status.peopleDetected}</div>
       </div>
       
