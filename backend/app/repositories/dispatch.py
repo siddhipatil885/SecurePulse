@@ -1,9 +1,11 @@
 """Transaction-neutral persistence for dispatch and notification workers."""
 from datetime import datetime, timedelta
+import random
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import (Assignment, AssignmentEvent, MarshalAvailability, MarshalProfile,
-    NotificationAttempt, NotificationOutbox, PropertyMembership, User)
+from app.models import (Assignment, AssignmentEvent, AuditRecord, IncidentStatusHistory,
+    MarshalAvailability, MarshalProfile, NotificationAttempt, NotificationOutbox,
+    PropertyMembership, SecurityEvent, User)
 
 
 class DispatchRepository:
@@ -54,7 +56,7 @@ class DispatchRepository:
     async def eligible_marshals(self, property_id: int, fresh_since: datetime) -> list[MarshalProfile]:
         active = select(func.count(Assignment.id)).where(
             Assignment.marshal_profile_id == MarshalProfile.id,
-            Assignment.status.in_(["ACCEPTED", "EN_ROUTE", "ON_SCENE"])).scalar_subquery()
+            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).scalar_subquery()
         statement = (select(MarshalProfile).join(User, User.id == MarshalProfile.user_id)
             .join(PropertyMembership, (PropertyMembership.user_id == MarshalProfile.user_id) &
                   (PropertyMembership.property_id == MarshalProfile.property_id))
@@ -71,6 +73,23 @@ class DispatchRepository:
             Assignment.status == "OFFERED", Assignment.expires_at <= now)
             .order_by(Assignment.expires_at, Assignment.id).limit(limit)
             .with_for_update(skip_locked=True))).all())
+
+    async def resolve_incident(self, incident_id: int, *, actor_subject: str,
+                               correlation_id: str) -> None:
+        incident = await self.session.scalar(select(SecurityEvent).where(
+            SecurityEvent.id == incident_id).with_for_update())
+        if incident is None or incident.status in {"RESOLVED", "CLOSED", "DISMISSED"}:
+            return
+        previous = incident.status
+        incident.status = "RESOLVED"
+        self.session.add(IncidentStatusHistory(security_event_id=incident.id,
+            previous_status=previous, new_status="RESOLVED", actor_subject=actor_subject,
+            reason="Marshal completed response", correlation_id=correlation_id))
+        self.session.add(AuditRecord(property_id=incident.property_id, actor_subject=actor_subject,
+            action="INCIDENT_STATUS_CHANGED", resource_type="security_event",
+            resource_id=str(incident.id), correlation_id=correlation_id,
+            details={"previous_status": previous, "new_status": "RESOLVED",
+                     "reason": "Marshal completed response"}))
 
 
 class OutboxRepository:
@@ -91,7 +110,8 @@ class OutboxRepository:
 
     async def record_attempt(self, outbox_id: int, *, provider: str, result: str, now: datetime,
                              provider_reference: str | None = None, error: str | None = None,
-                             response_metadata: dict | None = None) -> NotificationAttempt:
+                             response_metadata: dict | None = None, max_attempts: int = 5,
+                             retry_base_seconds: int = 5) -> NotificationAttempt:
         row = await self.session.scalar(select(NotificationOutbox).where(
             NotificationOutbox.id == outbox_id).with_for_update())
         if row is None:
@@ -106,6 +126,11 @@ class OutboxRepository:
         if result == "DELIVERED":
             row.status, row.sent_at = "SENT", now
         else:
-            row.status = "FAILED"
+            if attempt_number >= max_attempts:
+                row.status = "EXHAUSTED"
+            else:
+                row.status = "FAILED"
+                delay = min(retry_base_seconds * (2 ** (attempt_number - 1)), 3600)
+                row.available_at = now + timedelta(seconds=delay + random.uniform(0, delay * 0.2))
         await self.session.flush()
         return receipt

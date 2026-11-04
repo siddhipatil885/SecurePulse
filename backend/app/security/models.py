@@ -224,6 +224,7 @@ class SecurityEventCandidate(BaseModel):
     zone_id: str | None = None
     tripwire_id: str | None = None
     reason: str
+    policy_version: str = "1"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

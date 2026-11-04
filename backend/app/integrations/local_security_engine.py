@@ -35,11 +35,24 @@ class LocalSecurityEngine:
             return SecurityDecision(
                 event_type="DETECTION", score=0, severity="INFO", reason=None
             )
+        # A generic person sighting is useful telemetry, but it is not an
+        # actionable security incident. Preserve that distinction at the
+        # adapter that feeds incident persistence.
+        actionable = [
+            candidate for candidate in candidates
+            if candidate.event_type.value != "PERSON_DETECTED"
+        ]
+        if not actionable:
+            return SecurityDecision(
+                event_type="DETECTION", score=0, severity="INFO",
+                reason="Informational person detection; no security policy triggered",
+                metadata={"policy_version": self.engine.config.policy_version},
+            )
         # A single HTTP-style decision must represent the most urgent rule
         # result.  The person-detected rule runs first, so returning index 0
         # would otherwise hide zone, loitering, and tripwire incidents.
         candidate = max(
-            candidates,
+            actionable,
             key=lambda item: self._score(item.severity.value),
         )
         return SecurityDecision(
@@ -52,6 +65,7 @@ class LocalSecurityEngine:
                 "track_id": candidate.track_id,
                 "zone_id": candidate.zone_id,
                 "tripwire_id": candidate.tripwire_id,
+                "policy_version": candidate.policy_version,
             },
         )
 

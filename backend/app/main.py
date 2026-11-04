@@ -31,6 +31,8 @@ from app.integrations.local_security_engine import LocalSecurityEngine
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.services.event_processor import EventProcessor
+from app.services.dispatch_workers import (NotificationDispatcher, RecordingFakeProvider,
+    TimeoutEscalator)
 from app.workers.frigate_listener import FrigateListener
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ _mqtt_connected = False
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize MQTT listener and manage application lifecycle."""
 
     global _frigate_listener, _mqtt_connected
@@ -51,6 +53,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info("Application startup", extra={"app_name": settings.app_name})
     event_loop = asyncio.get_running_loop()
     track_reaper_task: asyncio.Task[None] | None = None
+    dispatch_worker_task: asyncio.Task[None] | None = None
+    session_factory = None
     
     # Initialize MQTT listener
     try:
@@ -127,6 +131,25 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         track_reaper_task = asyncio.create_task(expire_lost_tracks())
     except Exception as error:
         logger.error("Failed to initialize MQTT listener", extra={"error": str(error)}, exc_info=True)
+
+    async def run_dispatch_workers() -> None:
+        timeout_worker = TimeoutEscalator(session_factory)
+        fake_provider = RecordingFakeProvider()
+        # Expose the local drill sink for supervised development diagnostics.
+        app.state.notification_provider = fake_provider
+        notification_worker = NotificationDispatcher(
+            session_factory, fake_provider, worker_id="local-fake-provider"
+        )
+        while True:
+            try:
+                await timeout_worker.run_once()
+                await notification_worker.run_once()
+            except Exception:
+                logger.exception("Dispatch worker iteration failed")
+            await asyncio.sleep(2)
+
+    if session_factory is not None:
+        dispatch_worker_task = asyncio.create_task(run_dispatch_workers())
     
     yield
     
@@ -138,6 +161,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         track_reaper_task.cancel()
         try:
             await track_reaper_task
+        except asyncio.CancelledError:
+            pass
+    if dispatch_worker_task is not None:
+        dispatch_worker_task.cancel()
+        try:
+            await dispatch_worker_task
         except asyncio.CancelledError:
             pass
     
