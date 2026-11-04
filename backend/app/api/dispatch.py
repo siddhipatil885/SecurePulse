@@ -8,7 +8,8 @@ from app.core.exceptions import ApplicationError
 from app.core.reporter_auth import get_reporter
 from app.models import MarshalAvailability, MarshalProfile, PropertyMembership, User
 from app.repositories.dispatch import DispatchRepository
-from app.schemas.dispatch import AvailabilityUpdate, EligibleMarshal, OfferCreate, OfferResponse, OfferView
+from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, EligibleMarshal,
+    OfferCreate, OfferResponse, OfferView)
 from app.services.dispatch_service import DispatchService
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
@@ -81,6 +82,18 @@ async def accept_offer(offer_id: int, body: OfferResponse, user: User = Depends(
 async def decline_offer(offer_id: int, body: OfferResponse, user: User = Depends(get_reporter),
                         session: AsyncSession = Depends(get_session)):
     return await _respond(offer_id, body, False, user, session)
+
+
+@router.post("/offers/{offer_id}/progress", response_model=OfferView)
+async def update_progress(offer_id: int, body: AssignmentProgress,
+                          user: User = Depends(get_reporter),
+                          session: AsyncSession = Depends(get_session)):
+    offer = await DispatchService(session).marshal_progress(offer_id=offer_id,
+        user_id=user.id, status=body.status, expected_version=body.expected_version,
+        actor_subject=f"marshal:{user.id}")
+    await require_role(session, user.id, offer.property_id, {"marshal"})
+    await session.commit()
+    return offer
 
 
 async def _dispatcher_offer(offer_id: int, property_id: int, user: User,

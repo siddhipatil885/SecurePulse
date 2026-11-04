@@ -15,6 +15,11 @@ class OfferResponse(BaseModel):
     expected_version: int = Field(gt=0)
 
 
+class AssignmentProgress(BaseModel):
+    expected_version: int = Field(gt=0)
+    status: Literal["EN_ROUTE", "ON_SCENE", "COMPLETED"]
+
+
 class OfferView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

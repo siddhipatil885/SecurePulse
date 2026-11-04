@@ -187,6 +187,7 @@ class SecurityEngine:
                     zone_id=result.zone_id,
                     tripwire_id=result.tripwire_id,
                     reason=result.reason,
+                    policy_version=self._config.policy_version,
                     metadata=result.metadata,
                 )
             )

@@ -48,3 +48,22 @@ async def test_local_engine_converts_normalized_track_box_to_zone_pixels() -> No
     )
 
     assert decision.event_type == "ZONE_ENTRY"
+
+
+@pytest.mark.asyncio
+async def test_plain_person_detection_is_informational_not_an_incident() -> None:
+    engine = LocalSecurityEngine(SecurityEngine(SecurityConfig(policy_version="pilot-1")))
+
+    decision = await engine.evaluate(
+        SecurityContext(
+            camera_id=1,
+            object_type="person",
+            confidence=0.9,
+            timestamp=datetime(2026, 9, 19, tzinfo=timezone.utc),
+            track_id="person_track_2",
+        )
+    )
+
+    assert decision.event_type == "DETECTION"
+    assert decision.severity == "INFO"
+    assert decision.metadata["policy_version"] == "pilot-1"

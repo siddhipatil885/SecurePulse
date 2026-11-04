@@ -12,6 +12,7 @@ from app.models import (Assignment, AssignmentEvent, Camera, MarshalAvailability
     NotificationAttempt, NotificationOutbox, Property, PropertyMembership, SecurityEvent, User)
 from app.repositories.dispatch import OutboxRepository
 from app.services.dispatch_service import DispatchService
+from app.services.dispatch_workers import DeliveryResult, NotificationDispatcher
 
 
 @pytest_asyncio.fixture
@@ -68,6 +69,27 @@ async def test_idempotency_and_one_active_offer(factory):
 
 
 @pytest.mark.asyncio
+async def test_idempotency_key_reuse_for_different_incident_conflicts(factory):
+    async with factory() as session:
+        session.add(SecurityEvent(id=2, property_id=1, camera_id=1, event_type="INTRUSION",
+            object_type="person", confidence=.9, timestamp=datetime.now(timezone.utc),
+            severity="HIGH", status="OPEN", event_metadata={}))
+        await session.commit()
+        service = DispatchService(session)
+        await service.create_offer(incident_id=1, property_id=1, marshal_profile_id=1,
+            expires_in_seconds=60, idempotency_key="request-same-key", actor_subject="dispatcher:1")
+        await session.commit()
+        with pytest.raises(ApplicationError) as error:
+            await service.create_offer(incident_id=2, property_id=1, marshal_profile_id=1,
+                expires_in_seconds=60, idempotency_key="request-same-key", actor_subject="dispatcher:1")
+        assert error.value.code == "IDEMPOTENCY_CONFLICT"
+        with pytest.raises(ApplicationError) as error:
+            await service.create_offer(incident_id=1, property_id=1, marshal_profile_id=1,
+                expires_in_seconds=90, idempotency_key="request-same-key", actor_subject="dispatcher:1")
+        assert error.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.asyncio
 async def test_compare_and_swap_accept_and_capacity(factory):
     async with factory() as session:
         service = DispatchService(session)
@@ -81,6 +103,50 @@ async def test_compare_and_swap_accept_and_capacity(factory):
         with pytest.raises(ApplicationError) as error:
             await service.respond(offer_id=offer.id, user_id=1, accept=True,
                 expected_version=1, actor_subject="marshal:1")
+        assert error.value.code == "OFFER_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_marshal_progress_and_completion_resolve_incident(factory):
+    async with factory() as session:
+        service = DispatchService(session)
+        offer = await service.create_offer(incident_id=1, property_id=1, marshal_profile_id=1,
+            expires_in_seconds=60, idempotency_key="progress-0001", actor_subject="dispatcher:1")
+        await session.commit()
+        await service.respond(offer_id=offer.id, user_id=1, accept=True, expected_version=1,
+            actor_subject="marshal:1")
+        await service.marshal_progress(offer_id=offer.id, user_id=1, status="EN_ROUTE",
+            expected_version=2, actor_subject="marshal:1")
+        await service.marshal_progress(offer_id=offer.id, user_id=1, status="ON_SCENE",
+            expected_version=3, actor_subject="marshal:1")
+        completed = await service.marshal_progress(offer_id=offer.id, user_id=1, status="COMPLETED",
+            expected_version=4, actor_subject="marshal:1")
+        await session.commit()
+        incident = await session.get(SecurityEvent, 1)
+        history = list((await session.scalars(select(AssignmentEvent).where(
+            AssignmentEvent.assignment_id == offer.id).order_by(AssignmentEvent.id))).all())
+        assert completed.status == "COMPLETED"
+        assert incident.status == "RESOLVED"
+        assert [event.new_status for event in history] == [
+            "OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE", "COMPLETED"]
+
+
+@pytest.mark.asyncio
+async def test_marshal_progress_rejects_wrong_user_and_transition(factory):
+    async with factory() as session:
+        service = DispatchService(session)
+        offer = await service.create_offer(incident_id=1, property_id=1, marshal_profile_id=1,
+            expires_in_seconds=60, idempotency_key="progress-0002", actor_subject="dispatcher:1")
+        await session.commit()
+        await service.respond(offer_id=offer.id, user_id=1, accept=True, expected_version=1,
+            actor_subject="marshal:1")
+        with pytest.raises(ApplicationError) as error:
+            await service.marshal_progress(offer_id=offer.id, user_id=999, status="EN_ROUTE",
+                expected_version=2, actor_subject="marshal:999")
+        assert error.value.code == "NOT_FOUND"
+        with pytest.raises(ApplicationError) as error:
+            await service.marshal_progress(offer_id=offer.id, user_id=1, status="ON_SCENE",
+                expected_version=2, actor_subject="marshal:1")
         assert error.value.code == "OFFER_CONFLICT"
 
 
@@ -112,3 +178,31 @@ async def test_outbox_claim_and_attempt_receipt(factory):
         await session.commit()
         receipt = await session.scalar(select(NotificationAttempt))
         assert receipt and receipt.attempt_number == 1
+
+
+class FailingProvider:
+    name = "test-failure"
+
+    async def deliver(self, destination, event_type, payload, idempotency_key):
+        return DeliveryResult(delivered=False, error="temporary failure")
+
+
+@pytest.mark.asyncio
+async def test_notification_failure_retries_then_exhausts(factory):
+    worker = NotificationDispatcher(factory, FailingProvider(), worker_id="test-worker")
+    async with factory() as session:
+        await DispatchService(session).create_offer(incident_id=1, property_id=1, marshal_profile_id=1,
+            expires_in_seconds=60, idempotency_key="retry-00001", actor_subject="dispatcher:1")
+        await session.commit()
+
+    for attempt in range(5):
+        async with factory() as session:
+            outbox = await session.scalar(select(NotificationOutbox).order_by(NotificationOutbox.id))
+            outbox.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+        await worker.run_once()
+
+    async with factory() as session:
+        outbox = await session.scalar(select(NotificationOutbox).order_by(NotificationOutbox.id))
+        assert outbox.status == "EXHAUSTED"
+        assert await session.scalar(select(func.count(NotificationAttempt.id))) == 5

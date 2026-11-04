@@ -56,6 +56,9 @@ class SecurityConfig:
 
     # --- Detection filtering ---
     confidence_threshold: float = 0.5
+    # Bump whenever a rule or severity policy changes so decisions can be
+    # interpreted against the policy that produced them.
+    policy_version: str = "1"
 
     # --- Rule thresholds ---
     loitering_threshold_seconds: float = 15.0
