@@ -37,7 +37,7 @@ export interface BoundingBox {
 export interface PersonTrack {
   trackId: string;
   cameraId: string;
-  objectType: 'person';
+  objectType: string;
   firstSeen: string;
   lastSeen: string;
   boundingBox: BoundingBox | null;

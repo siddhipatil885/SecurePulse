@@ -1,6 +1,8 @@
 """Phase 3 Frigate adapter tests."""
 
 from datetime import timezone
+import json
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,10 @@ def test_parser_normalizes_frigate_event() -> None:
     assert detection.confidence == 0.94
     assert detection.timestamp.tzinfo == timezone.utc
     assert detection.metadata["zones"] == ["entrance"]
+    assert detection.metadata["source_system"] == "frigate"
+    assert detection.metadata["event_phase"] == "new"
+    assert detection.metadata["occurred_at"] == detection.timestamp.isoformat()
+    assert detection.metadata["ingested_at"]
 
 
 def test_parser_accepts_end_event_when_frigate_omits_end_time() -> None:
@@ -77,6 +83,16 @@ def test_parser_revision_deduplicates_replays_but_preserves_real_updates() -> No
     assert len(first.metadata["revision"]) == 64
 
 
+def test_versioned_event_fixture_covers_frigate_lifecycle() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "frigate" / "v0.13" / "events.json"
+    payloads = json.loads(fixture_path.read_text(encoding="utf-8"))
+    detections = [FrigateEventParser().parse(payload) for payload in payloads]
+
+    assert [item.metadata["lifecycle"] for item in detections] == ["new", "update", "end"]
+    assert {item.source_event_id for item in detections} == {"sample-event-001"}
+    assert detections[1].metadata["bounding_box"] == [402, 291, 953, 719]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -89,6 +105,14 @@ def test_parser_revision_deduplicates_replays_but_preserves_real_updates() -> No
 def test_parser_rejects_malformed_or_unsupported_events(payload: object) -> None:
     with pytest.raises(FrigatePayloadError):
         FrigateEventParser().parse(payload)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("score", [True, -0.1, 1.1, float("nan"), float("inf")])
+def test_parser_rejects_invalid_confidence(score: float) -> None:
+    with pytest.raises(FrigatePayloadError):
+        FrigateEventParser().parse(
+            {"type": "new", "after": {"id": "e1", "camera": "cam", "label": "person", "top_score": score, "start_time": 1}}
+        )
 
 
 def test_detection_event_rejects_out_of_range_confidence() -> None:
@@ -125,3 +149,17 @@ def test_client_connection_callbacks_control_live_state() -> None:
     assert client.connected is True
     client._on_disconnect(client.client, None, 1)
     assert client.connected is False
+
+
+def test_client_configures_broker_credentials() -> None:
+    client = FrigateClient(
+        on_detection=lambda _: None,
+        settings=Settings(mqtt_username="securepulse", mqtt_password="example-password"),
+    )
+
+    assert client.client._username == b"securepulse"
+
+
+def test_mqtt_credentials_must_be_configured_as_a_pair() -> None:
+    with pytest.raises(ValueError, match="configured together"):
+        Settings(mqtt_username="securepulse")
