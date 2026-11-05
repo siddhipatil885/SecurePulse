@@ -20,10 +20,13 @@ from app.api.properties import router as properties_router
 from app.api.realtime import router as realtime_router
 from app.api.reporter import router as reporter_router
 from app.api.tracks import router as tracks_router
+from app.api.dashboard import router as dashboard_router
+from app.api.operator_cases import router as operator_cases_router
 from app.core.config import get_settings
 from app.core.dependencies import get_event_publisher, get_person_tracker
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.upload_limit import EvidenceUploadLimitMiddleware
 from app.database.database import dispose_database, get_session_factory
 from app.domain.events import DetectionEvent
 from app.integrations.local_security_engine import LocalSecurityEngine
@@ -221,21 +224,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         async def run_dispatch_workers() -> None:
             timeout_worker = TimeoutEscalator(session_factory)
-            fake_provider = RecordingFakeProvider()
-
-            # This local drill provider records intents in memory and does not
-            # contact marshals or public emergency services.
+            # Preserve delivery intents by default. Recording a drill is opt-in
+            # and must never silently mark a real notification as delivered.
+            fake_provider = RecordingFakeProvider() if settings.dispatch_notification_provider == "recording-fake" else None
             app.state.notification_provider = fake_provider
-            notification_worker = NotificationDispatcher(
-                session_factory,
-                fake_provider,
-                worker_id="local-fake-provider",
-            )
+            notification_worker = NotificationDispatcher(session_factory, fake_provider,
+                worker_id="local-fake-provider") if fake_provider is not None else None
 
             while True:
                 try:
                     await timeout_worker.run_once()
-                    await notification_worker.run_once()
+                    if notification_worker is not None:
+                        await notification_worker.run_once()
                 except Exception:
                     logger.exception("Dispatch worker iteration failed")
 
@@ -303,6 +303,7 @@ def create_app() -> FastAPI:
         description="Edge-oriented security surveillance backend.",
         lifespan=lifespan,
     )
+    app.add_middleware(EvidenceUploadLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.parsed_cors_origins,
@@ -322,7 +323,8 @@ def create_app() -> FastAPI:
     app.include_router(evidence_router, prefix="/api/v1")
     app.include_router(reporter_router, prefix="/api/v1")
     app.include_router(dispatch_router, prefix="/api/v1")
-
+    app.include_router(dashboard_router, prefix="/api/v1")
+    app.include_router(operator_cases_router, prefix="/api/v1")
     register_exception_handlers(app)
     return app
 

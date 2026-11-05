@@ -1,11 +1,11 @@
 """Transaction-neutral persistence for dispatch and notification workers."""
 from datetime import datetime, timedelta
 import random
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (Assignment, AssignmentEvent, AuditRecord, IncidentStatusHistory,
     MarshalAvailability, MarshalProfile, NotificationAttempt, NotificationOutbox,
-    PropertyMembership, SecurityEvent, User)
+    PropertyMembership, ReporterIncident, ReporterIncidentTimeline, SecurityEvent, User)
 
 
 class DispatchRepository:
@@ -13,7 +13,7 @@ class DispatchRepository:
         self.session = session
 
     async def lock_offer(self, offer_id: int) -> Assignment | None:
-        return await self.session.scalar(select(Assignment).where(Assignment.id == offer_id).with_for_update())
+        return await self.session.scalar(select(Assignment).where(Assignment.id == offer_id).with_for_update().execution_options(populate_existing=True))
 
     async def find_by_idempotency_key(self, key: str) -> Assignment | None:
         return await self.session.scalar(select(Assignment).where(Assignment.idempotency_key == key))
@@ -27,6 +27,7 @@ class DispatchRepository:
             security_event_id=offer.security_event_id, kind="ASSIGNMENT_OFFERED",
             destination=f"marshal:{offer.marshal_profile_id}",
             payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
+                     "reporter_incident_id": offer.reporter_incident_id,
                      "expires_at": offer.expires_at.isoformat()},
             dedupe_key=f"assignment:{offer.id}:offered", status="PENDING"))
         await self.session.flush()
@@ -48,15 +49,18 @@ class DispatchRepository:
                 security_event_id=offer.security_event_id, kind=f"ASSIGNMENT_{status}",
                 destination=f"property:{offer.property_id}:dispatchers",
                 payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
+                         "reporter_incident_id": offer.reporter_incident_id,
                          "status": status, "version": offer.version},
                 dedupe_key=f"assignment:{offer.id}:{status.lower()}:{offer.version}", status="PENDING"))
         await self.session.flush()
         return offer
 
     async def eligible_marshals(self, property_id: int, fresh_since: datetime) -> list[MarshalProfile]:
+        now = fresh_since + timedelta(minutes=5)
         active = select(func.count(Assignment.id)).where(
             Assignment.marshal_profile_id == MarshalProfile.id,
-            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).scalar_subquery()
+            or_(Assignment.status.in_(["ACCEPTED", "EN_ROUTE", "ON_SCENE"]),
+                and_(Assignment.status == "OFFERED", Assignment.expires_at > now))).scalar_subquery()
         statement = (select(MarshalProfile).join(User, User.id == MarshalProfile.user_id)
             .join(PropertyMembership, (PropertyMembership.user_id == MarshalProfile.user_id) &
                   (PropertyMembership.property_id == MarshalProfile.property_id))
@@ -74,19 +78,24 @@ class DispatchRepository:
             .order_by(Assignment.expires_at, Assignment.id).limit(limit)
             .with_for_update(skip_locked=True))).all())
 
-    async def resolve_incident(self, incident_id: int, *, actor_subject: str,
-                               correlation_id: str) -> None:
-        incident = await self.session.scalar(select(SecurityEvent).where(
-            SecurityEvent.id == incident_id).with_for_update())
+    async def resolve_incident(self, incident_id: int | None, *, actor_subject: str,
+                               correlation_id: str, reporter_incident_id: int | None = None) -> None:
+        model = SecurityEvent if incident_id is not None else ReporterIncident
+        source_id = incident_id if incident_id is not None else reporter_incident_id
+        incident = await self.session.scalar(select(model).where(model.id == source_id).with_for_update())
         if incident is None or incident.status in {"RESOLVED", "CLOSED", "DISMISSED"}:
             return
         previous = incident.status
         incident.status = "RESOLVED"
-        self.session.add(IncidentStatusHistory(security_event_id=incident.id,
-            previous_status=previous, new_status="RESOLVED", actor_subject=actor_subject,
-            reason="Marshal completed response", correlation_id=correlation_id))
+        if incident_id is not None:
+            self.session.add(IncidentStatusHistory(security_event_id=incident.id,
+                previous_status=previous, new_status="RESOLVED", actor_subject=actor_subject,
+                reason="Marshal completed response", correlation_id=correlation_id))
+        else:
+            self.session.add(ReporterIncidentTimeline(incident_id=incident.id, status="RESOLVED",
+                actor_subject=actor_subject, message="Marshal completed response"))
         self.session.add(AuditRecord(property_id=incident.property_id, actor_subject=actor_subject,
-            action="INCIDENT_STATUS_CHANGED", resource_type="security_event",
+            action="INCIDENT_STATUS_CHANGED", resource_type="security_event" if incident_id is not None else "reporter_incident",
             resource_id=str(incident.id), correlation_id=correlation_id,
             details={"previous_status": previous, "new_status": "RESOLVED",
                      "reason": "Marshal completed response"}))

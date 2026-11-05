@@ -1,0 +1,45 @@
+.account-page { min-height: 75vh; display: grid; place-items: center; padding: 32px 16px; }
+.account-card { width: min(100%, 500px); padding: 32px; border: 1px solid var(--border-subtle); background: var(--bg-panel); border-radius: 16px; }
+.account-card h1 { font-size: 1.6rem; margin: 12px 0; }
+.account-card p { margin: 12px 0; }
+.brand { color: var(--accent-blue); letter-spacing: .2em; font-size: .8rem; }
+fieldset { border: 0; min-width: 0; }
+label { display: flex; flex-direction: column; gap: 6px; font-size: .9rem; }
+.account-card label { margin: 16px 0; }
+input, select, textarea { font: inherit; width: 100%; padding: 10px 12px; color: #d7edf0; background: #08121b; border: 1px solid #35515d; border-radius: 7px; }
+textarea { min-height: 80px; resize: vertical; }
+button { cursor: pointer; font: inherit; background: #123541; color: #d7edf0; border: 1px solid #397381; border-radius: 7px; padding: 9px 14px; }
+button:hover:not(:disabled) { background: #1b4c59; }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #70dae5; outline-offset: 3px; }
+.account-card button { margin: 8px 8px 0 0; }
+.text-button { background: transparent; border: 0; color: var(--accent-blue); padding-left: 0; }
+.field-hint, .account-email { color: #83a8b1; font-size: .85rem; }
+[role="alert"] { color: #ffb4b4; }
+.account-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border-subtle); background: #0a141d; }
+.account-toolbar > div { margin-right: auto; }
+.account-email { display: block; }
+.account-toolbar select { min-width: 200px; max-width: 380px; }
+.property-context, .global-error { padding: 16px 24px 0; }
+.property-context h1 { font-size: 1.3rem; }
+.property-context p { font-size: .85rem; }
+.retry-server { display: block; margin: 0 auto 24px; }
+.workspace-tabs { display: flex; gap: 12px; margin-bottom: 20px; }
+.workspace-tabs [aria-pressed="true"] { background: #245e6a; }
+.incident-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .8fr); gap: 20px; }
+.incident-panel { padding: 20px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); min-width: 0; }
+.incident-panel h2, .incident-panel h3 { margin-bottom: 12px; }
+.incident-filters, .incident-actions, .pagination { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 16px 0; }
+.incident-filters label { flex: 1; }
+.incident-list { list-style: none; }
+.incident-list button { width: 100%; text-align: left; margin: 5px 0; display: grid; gap: 5px; }
+.incident-list [aria-pressed="true"] { border-color: #73deeb; }
+.incident-status { font-size: .8rem; color: #b7d9dd; }
+.incident-detail dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; margin-bottom: 20px; }
+.incident-detail dd { overflow-wrap: anywhere; }
+.incident-detail h3 { margin-top: 24px; }
+.history-list { padding-left: 20px; }
+.history-list li { margin: 12px 0; }
+.evidence-media { max-width: 100%; max-height: 350px; margin-top: 10px; }
+.panel-content button.incident-link { margin-top: 6px; padding: 4px 8px; font-size: .8rem; }
+@media (max-width: 900px) { .incident-layout { grid-template-columns: 1fr; } .account-toolbar { align-items: stretch; } }

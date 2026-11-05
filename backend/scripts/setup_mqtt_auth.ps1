@@ -6,6 +6,9 @@ $ErrorActionPreference = "Stop"
 $configDir = Join-Path $PSScriptRoot "..\deployment\mosquitto\config"
 $configDir = (Resolve-Path $configDir).Path
 $passwordFile = Join-Path $configDir "passwordfile"
+if (Test-Path $passwordFile) {
+    throw "Password file already exists. Preserve it; use mosquitto_passwd without -c to update a specific account during maintenance."
+}
 
 Write-Host "Create a password for Frigate's publish-only MQTT account."
 docker run --rm -it --mount "type=bind,source=$configDir,target=/mosquitto/config" $MosquittoImage mosquitto_passwd -c /mosquitto/config/passwordfile frigate

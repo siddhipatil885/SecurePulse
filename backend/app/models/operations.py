@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -103,6 +103,33 @@ class NotificationAttempt(Base):
     outbox = relationship("NotificationOutbox", back_populates="attempts")
 
 
+class UserDeviceToken(Base):
+    __tablename__ = "user_device_tokens"
+    __table_args__ = (
+        UniqueConstraint("user_id", "device_id", name="uq_user_device_tokens_user_device"),
+        Index("ix_user_device_tokens_active", "user_id", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    device_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    push_token: Mapped[str] = mapped_column(String(512), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "category", name="uq_notification_preferences_user_category"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class MarshalProfile(Base):
     __tablename__ = "marshal_profiles"
     __table_args__ = (Index("ix_marshal_profiles_property_active", "property_id", "active"),)
@@ -128,17 +155,28 @@ class Assignment(Base):
     __tablename__ = "assignments"
     __table_args__ = (
         Index("ix_assignments_event_status", "security_event_id", "status"),
+        Index("ix_assignments_reporter_incident_status", "reporter_incident_id", "status"),
         Index(
             "uq_assignments_one_active_offer",
             "security_event_id",
             unique=True,
             postgresql_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            sqlite_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
         ),
+        Index("uq_assignments_one_active_reporter", "reporter_incident_id", unique=True,
+            postgresql_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            sqlite_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')")),
+        CheckConstraint("(security_event_id IS NOT NULL AND reporter_incident_id IS NULL) OR "
+                        "(security_event_id IS NULL AND reporter_incident_id IS NOT NULL)",
+                        name="ck_assignments_one_incident_source"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     property_id: Mapped[int] = mapped_column(ForeignKey("properties.id"), nullable=False)
-    security_event_id: Mapped[int] = mapped_column(ForeignKey("security_events.id", ondelete="CASCADE"), nullable=False)
+    security_event_id: Mapped[int | None] = mapped_column(ForeignKey("security_events.id", ondelete="CASCADE"))
+    reporter_incident_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reporter_incidents.id", ondelete="CASCADE")
+    )
     marshal_profile_id: Mapped[int] = mapped_column(ForeignKey("marshal_profiles.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     offered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

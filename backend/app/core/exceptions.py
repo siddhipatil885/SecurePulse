@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=exception.status_code,
-            headers=exception.headers,
+            headers={**exception.headers, **({"Cache-Control": "no-store"} if request.url.path.startswith("/api/v1/dashboard") else {})},
             content={"error": {"code": exception.code, "message": exception.message}},
         )
 
@@ -52,3 +53,10 @@ def register_exception_handlers(app: FastAPI) -> None:
                 }
             },
         )
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exception: RequestValidationError) -> JSONResponse:
+        # Validation errors must not echo submitted passwords or other input.
+        return JSONResponse(status_code=422, headers={"Cache-Control": "no-store"}, content={
+            "detail": [{"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
+                       for item in exception.errors()]
+        })

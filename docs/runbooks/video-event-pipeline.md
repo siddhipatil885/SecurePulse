@@ -1,5 +1,10 @@
 # Video and Frigate event pipeline runbook
 
+For the current copy-to-PC deployment and acceptance sequence, see
+[main host handoff](main-host-handoff.md) and the
+[deployment inventory](../DEPLOYMENT_INVENTORY.md). Existing live deployments
+must use their verified project identity and preserved credentials.
+
 This runbook uses `backend/deployment/docker-compose.yml` as the single canonical stack. The separate `backend/frigate/docker-compose.yml` is a legacy opt-in profile and must not be started alongside the canonical stack. The default Compose project name is `securepulse`, matching the original deployment and its named volumes. Use `--project-name securepulse-person1` only for a deliberately isolated test deployment with its own `.env`; never use that name when verifying the original database.
 
 ## Topology and host ports
@@ -80,10 +85,10 @@ Expected: broker healthy; Frigate logs show MQTT connection and incoming frames;
 Run the automated allow/deny checks after the broker is healthy:
 
 ```powershell
-.\scripts\smoke_mqtt_acl.ps1
+.\scripts\smoke_mqtt_acl.ps1 -ProjectName securepulse-person1
 ```
 
-It publishes only to `frigate/engineer1/acl-probe`, which the backend does not subscribe to. The script checks authorized publishing/subscribing, denied cross-role access, and invalid credentials. Do not paste passwords into shell history, tickets, or logs.
+It publishes only to `frigate/engineer1/acl-probe` and `frigate/engineer1/acl-probe/set`, which the backend does not subscribe to. The latter matches the control-topic ACL without toggling a real camera. The script checks authorized publishing/subscribing, denied cross-role access, invalid credentials, and anonymous rejection. Do not paste passwords into shell history, tickets, or logs.
 
 ## Diagnostics and recovery
 

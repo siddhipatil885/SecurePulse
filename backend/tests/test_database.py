@@ -22,12 +22,17 @@ def test_models_are_registered_with_shared_metadata() -> None:
         "marshal_profiles",
         "notification_attempts",
         "notification_outbox",
+        "notification_preferences",
         "properties",
         "property_memberships",
+        "reporter_incident_evidence",
+        "reporter_incident_timeline",
+        "reporter_incidents",
         "security_events",
         "source_event_receipts",
         "tracks",
         "users",
+        "user_device_tokens",
         "zones",
     }
 

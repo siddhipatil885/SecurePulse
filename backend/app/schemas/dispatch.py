@@ -1,14 +1,21 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OfferCreate(BaseModel):
-    incident_id: int = Field(gt=0)
+    incident_id: int | None = Field(default=None, gt=0)
+    reporter_incident_id: int | None = Field(default=None, gt=0)
     property_id: int = Field(gt=0)
     marshal_profile_id: int = Field(gt=0)
     expires_in_seconds: int = Field(default=60, ge=10, le=3600)
     idempotency_key: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def require_incident_source(self):
+        if (self.incident_id is None) == (self.reporter_incident_id is None):
+            raise ValueError("Provide exactly one incident source.")
+        return self
 
 
 class OfferResponse(BaseModel):
@@ -23,7 +30,8 @@ class AssignmentProgress(BaseModel):
 class OfferView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    security_event_id: int
+    security_event_id: int | None
+    reporter_incident_id: int | None = None
     property_id: int
     marshal_profile_id: int
     status: Literal["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE", "DECLINED", "EXPIRED", "CANCELLED", "COMPLETED"]

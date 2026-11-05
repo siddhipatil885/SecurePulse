@@ -20,7 +20,8 @@ if config.config_file_name is not None:
 def migration_database_url() -> str:
     """Use the synchronous PostgreSQL driver required by Alembic."""
 
-    database_url = get_settings().database_url
+    settings = get_settings()
+    database_url = settings.database_url_unpooled or settings.database_url
     if database_url.startswith("postgresql+asyncpg://"):
         return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
     if database_url.startswith("postgresql://"):

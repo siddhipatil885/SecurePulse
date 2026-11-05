@@ -60,6 +60,7 @@ class TimeoutEscalator:
                     security_event_id=offer.security_event_id, kind="DISPATCH_ESCALATION_REQUIRED",
                     destination=f"property:{offer.property_id}:dispatchers",
                     payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
+                             "reporter_incident_id": offer.reporter_incident_id,
                              "reason": "offer_expired"},
                     dedupe_key=f"assignment:{offer.id}:escalation:{offer.version}", status="PENDING"))
             return len(offers)

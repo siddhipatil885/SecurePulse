@@ -22,8 +22,9 @@
 - Assignment changes, history, and notification intents are stored in the
   same transaction. The worker retries failed deliveries up to five attempts
   with exponential delay and jitter; `EXHAUSTED` rows require operator review.
-- The application currently uses a bounded in-memory recording fake provider.
-  It records attempts for a local drill and never contacts marshals or public
+- Notification delivery defaults to `DISPATCH_NOTIFICATION_PROVIDER=disabled`;
+  intents remain pending. For local drills, explicitly opt in to `recording-fake`.
+  Production configuration rejects that fake provider. It records attempts and never contacts marshals or public
   emergency services. `SENT` with provider `recording-fake` means only that the
   fake sink recorded the intent, not that a person was contacted or read it.
 

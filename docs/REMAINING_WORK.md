@@ -1,25 +1,63 @@
-# Remaining SecurePulse work
+# SecurePulse completion status
 
-## Required to finish Person 1 acceptance
+Updated 2026-11-04. Repository work is prepared for the main camera PC. That PC
+is unavailable from this session; host deployment and physical acceptance remain
+pending. Use [the handoff](runbooks/main-host-handoff.md) for the exact sequence.
 
-- [ ] Restore the host capture/publisher feeding MediaMTX `/live`; direct `/live` and go2rtc `front_door` frames trigger black-frame detection. Check the capture device and publisher logs, then verify non-black frames on `/live` before changing camera mappings.
-- [ ] Complete a controlled authorized-person walk-through for both cameras. A new natural laptop event was traced through Frigate, snapshot, backend API, and PostgreSQL, but the active track ended before it could be seen in the live track API/browser. `front_door` has no fresh event. Follow the detailed checks in [the end-to-end report](END_TO_END_TEST_REPORT.md).
-- [ ] Exercise browser WebRTC playback on the host for both cameras and verify advancing video. Laptop playback was reported by the user but not independently observed in this check; Front Door is upstream-black. The effective ICE candidate is fixed to `127.0.0.1:18556` and the port remains bound to loopback. Decide separately whether LAN clients need playback before changing exposure.
-- [x] Resolve reporter test setup errors with a dialect-aware JSON type: generic SQLAlchemy `JSON` with a PostgreSQL `JSONB` variant. Full backend suite passes: 236 passed, 7 skipped.
-- [x] Rebuild/redeploy only the Person 1 backend and verify `/health/edge` reports `detection_enabled` and `detection_disabled` status accurately. During this work it detected both cameras disabled; ON control restored them and the endpoint returned `ok` with both enabled. Recheck at acceptance time because Frigate runtime toggles can change.
-- [x] Make live overlays and counts camera-specific and active-track-only, show object class/confidence with stable colors, and clear boxes at the Frigate end lifecycle. Backend tests and dashboard build/lint pass; backend WebSocket emitted real active laptop boxes and empty sets at end. Browser rendering/movement still needs direct visual confirmation.
-- [ ] If confidence above 100% reappears, capture the exact dashboard event and matching `/api/v1/events` response. Current sampled values were 0.701–0.844 and display correctly as 70–84%; formatter was not changed.
+## Repository work completed
 
-## Security and deployment cleanup
+- [x] Identify canonical Compose source and document project, port, source-path,
+  and volume ownership in [the inventory](DEPLOYMENT_INVENTORY.md).
+- [x] Add bounded RTSP video readiness checks in the `video-readiness` Compose
+  sidecar. A fresh video SDP is required for each configured publisher path.
+- [x] Use dependency readiness (`/health/ready`) for backend Docker health.
+- [x] Add host inventory, decoded-source/black-frame checks, CPU/memory/FPS/event
+  baseline collection, and explicit single-service restart recovery commands.
+- [x] Add a PowerShell host acceptance entrypoint and sanitized JSON evidence.
+- [x] Disable anonymous access in both checked-in broker templates and preserve
+  existing password files when running account setup.
+- [x] Require explicit project selection for MQTT ACL checks; test anonymous
+  rejection and use probe topics instead of changing a real detector setting.
+- [x] Keep repository standalone Frigate bindings on loopback and behind an opt-in
+  legacy profile. Remove the ineffective WebRTC candidate environment option;
+  document the literal config field that actually controls the candidate.
+- [x] Fix overlay projection when detection/playback resolutions differ, with
+  cover/contain regression tests. Show LIVE on actual video playback.
+- [x] Provide browser timing, moving-box, clearing and confidence diagnostics.
+- [x] Add CI checks for dashboard geometry/build/lint, Compose rendering and
+  PowerShell parsing. Remote CI execution remains pending a push.
+- [x] Reporter JSON portability and live active-track filtering were previously
+  integrated; Person 1 integration was merged into main in PR #9 (`43463fc`).
 
-- [ ] Schedule a maintenance window to disable anonymous access on the legacy MQTT broker exposed on all interfaces at TCP 1883. Inventory its actual clients first and verify they work with authenticated ACLs afterwards. The broker was intentionally not reconfigured during this audit because it is part of a live legacy deployment.
-- [ ] Review all-interface exposure for standalone Frigate and legacy services. Restrict bindings to the required host/network and align WebRTC ICE candidates with the chosen access scope.
-- [ ] Identify and document the canonical long-term Compose project. Keep Person 1, legacy deployment, and standalone Frigate separate until their data and consumers are understood.
-- [ ] After code review, commit the intended integration changes on the integration branch. No commit or push was made as part of this audit. Preserve `C:\SecurePulse-person1` until the original integrated project has passed its runtime verification, as requested.
+## Acceptance requiring the camera PC
 
-## Operational follow-up
+Mobile reports now reach the unified operator dashboard, including evidence,
+status commands, dispatch offer/cancel, and marshal progress through resolution.
+The real mobile HTTP client and Chrome workflow run against temporary test
+backends. See [mobile/backend integration](runbooks/mobile-backend-integration.md)
+for deployment and device acceptance. Provider delivery, physical device checks,
+and PostgreSQL concurrency acceptance remain pending.
 
-- [ ] Add a healthcheck for MediaMTX (or a bounded RTSP readiness probe) so Compose can detect a process that is running but not serving streams.
-- [ ] Add a non-secret deployment inventory with Compose project names, source paths, ports, and volume ownership.
-- [ ] Capture a baseline for CPU, memory, inference FPS, and event throughput under expected camera load.
-- [ ] Test camera disconnect/reconnect and broker/backend restart recovery in a planned window, then record sanitized results.
+- [ ] Deploy the prepared changes to the verified existing Compose project after
+  inventory and database backup. Preserve `C:\SecurePulse-person1` and volumes.
+- [ ] Restore the actual host capture publisher feeding `/live`; verify both
+  `/live` and `/webcam` contain advancing, non-black camera frames.
+- [ ] Complete an authorized-person walk-through for both cameras. Match fresh
+  Frigate IDs and snapshots to backend API and PostgreSQL rows.
+- [ ] Confirm browser WebRTC playback, correctly aligned moving boxes, counts,
+  and clearing after departure. Use the browser helper and visual confirmation.
+- [ ] If a confidence above 100% reappears, retain the exact displayed value,
+  matching event ID and API confidence. Do not mark it reproduced without evidence.
+- [ ] Secure the actual legacy broker's mounted, untracked config after identifying
+  clients and configuring their credentials/ACLs. Repository edits do not change
+  the previously observed `mosquitto-original.conf` on the PC.
+- [ ] Apply reviewed network bindings to the actual legacy containers and verify
+  their clients. Do not collapse projects or change volume ownership implicitly.
+- [ ] Collect a baseline under representative camera load; record host hardware,
+  workload, CPU/memory/FPS and persisted-event throughput.
+- [ ] Run broker/backend restart recovery and controlled publisher disconnect/
+  reconnect tests. Generate a fresh person event after recovery.
+
+Historical host evidence is retained in [system health](SYSTEM_HEALTH_REPORT.md)
+and [end-to-end results](END_TO_END_TEST_REPORT.md). Those observations were made
+on 2026-11-03 and do not verify the new deployment.

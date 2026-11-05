@@ -20,7 +20,18 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      ["expo-location", {
+        "locationWhenInUsePermission": "Attach your current location to an incident report when you choose.",
+        "locationAlwaysPermission": false,
+        "locationAlwaysAndWhenInUsePermission": false
+      }],
+      ["expo-image-picker", {
+        "photosPermission": "Choose a photo or video to attach as incident evidence.",
+        "cameraPermission": false,
+        "microphonePermission": false
+      }],
+      "expo-notifications"
     ]
   }
 }

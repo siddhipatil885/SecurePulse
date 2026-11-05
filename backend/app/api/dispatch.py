@@ -3,10 +3,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.dependencies import get_session
+from app.core.dependencies import get_session, get_event_publisher
 from app.core.exceptions import ApplicationError
 from app.core.reporter_auth import get_reporter
-from app.models import MarshalAvailability, MarshalProfile, PropertyMembership, User
+from app.models import MarshalAvailability, MarshalProfile, Property, PropertyMembership, User
 from app.repositories.dispatch import DispatchRepository
 from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, EligibleMarshal,
     OfferCreate, OfferResponse, OfferView)
@@ -15,11 +15,16 @@ from app.services.dispatch_service import DispatchService
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
 
+async def publish_assignment_update(offer):
+    source, source_id = ("camera", offer.security_event_id) if offer.security_event_id is not None else ("reporter", offer.reporter_incident_id)
+    await get_event_publisher().publish_case(offer.property_id, f"{source}:{source_id}")
+
+
 async def require_role(session: AsyncSession, user_id: int, property_id: int,
                        roles: set[str]) -> PropertyMembership:
-    membership = await session.scalar(select(PropertyMembership).where(
+    membership = await session.scalar(select(PropertyMembership).join(Property).where(
         PropertyMembership.user_id == user_id, PropertyMembership.property_id == property_id,
-        PropertyMembership.active.is_(True)))
+        PropertyMembership.active.is_(True), Property.active.is_(True)))
     if membership is None or membership.role not in roles:
         raise ApplicationError("FORBIDDEN", "You cannot perform dispatch actions for this property.", 403)
     return membership
@@ -56,10 +61,12 @@ async def create_offer(body: OfferCreate, user: User = Depends(get_reporter),
                        session: AsyncSession = Depends(get_session)):
     await require_role(session, user.id, body.property_id, {"owner", "dispatcher"})
     offer = await DispatchService(session).create_offer(incident_id=body.incident_id,
+        reporter_incident_id=body.reporter_incident_id,
         property_id=body.property_id, marshal_profile_id=body.marshal_profile_id,
         expires_in_seconds=body.expires_in_seconds, idempotency_key=body.idempotency_key,
         actor_subject=f"reporter:{user.id}")
     await session.commit()
+    await publish_assignment_update(offer)
     return offer
 
 
@@ -69,6 +76,7 @@ async def _respond(offer_id: int, body: OfferResponse, accept: bool,
         accept=accept, expected_version=body.expected_version, actor_subject=f"marshal:{user.id}")
     await require_role(session, user.id, offer.property_id, {"marshal"})
     await session.commit()
+    await publish_assignment_update(offer)
     return offer
 
 
@@ -93,6 +101,7 @@ async def update_progress(offer_id: int, body: AssignmentProgress,
         actor_subject=f"marshal:{user.id}")
     await require_role(session, user.id, offer.property_id, {"marshal"})
     await session.commit()
+    await publish_assignment_update(offer)
     return offer
 
 
@@ -111,6 +120,7 @@ async def expire_offer(offer_id: int, property_id: int = Query(ge=1),
     await _dispatcher_offer(offer_id, property_id, user, session)
     offer = await DispatchService(session).expire(offer_id=offer_id, actor_subject=f"reporter:{user.id}")
     await session.commit()
+    await publish_assignment_update(offer)
     return offer
 
 
@@ -120,4 +130,5 @@ async def cancel_offer(offer_id: int, property_id: int = Query(ge=1),
     await _dispatcher_offer(offer_id, property_id, user, session)
     offer = await DispatchService(session).cancel(offer_id=offer_id, actor_subject=f"reporter:{user.id}")
     await session.commit()
+    await publish_assignment_update(offer)
     return offer

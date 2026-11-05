@@ -65,6 +65,8 @@ class IncidentService:
                 f"Cannot {command} an incident in state {incident.status}.",
                 409,
             )
+        if command in {"resolve", "dismiss"} and await self.repository.has_active_assignment(incident.id):
+            raise ApplicationError("ACTIVE_ASSIGNMENT_EXISTS", "Cancel the active assignment before closing this incident.", 409)
         await self.repository.record_transition(
             incident,
             new_status=new_status,

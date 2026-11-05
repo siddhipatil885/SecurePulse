@@ -1,5 +1,6 @@
 .venv/
 .env
+/operational-evidence/
 __pycache__/
 *.py[cod]
 .pytest_cache/# ── Environment ──

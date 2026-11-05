@@ -11,13 +11,16 @@ export function HomeScreen() {
   const { propertyId } = useAuth();
   const cameras = useCameras(); const events = useEvents(); const summary = useSummary();
   const recent = events.data?.pages[0]?.items.slice(0, 3) ?? [];
-  return <Screen>
+  const refreshing = summary.isRefetching || events.isRefetching || cameras.isRefetching;
+  const refresh = () => { void Promise.all([summary.refetch(), events.refetch(), cameras.refetch()]); };
+  return <Screen refreshing={refreshing} onRefresh={refresh}>
     <Text style={ui.title}>Your security overview</Text>
     <PropertyBanner />
     <Notice>Security status: unavailable. An automated detection does not confirm an incident.</Notice>
     <PrimaryButton label="Report incident" onPress={() => router.push('/report')} disabled={!propertyId} />
     <PrimaryButton variant="secondary" label="Alerts" onPress={() => router.push('/alerts')} />
-    <PrimaryButton variant="secondary" label="Cameras" onPress={() => router.push('/cameras')} />
+    <PrimaryButton variant="secondary" label="My incident reports" onPress={() => router.push('/incidents')} />
+    {propertyId !== null && <PrimaryButton variant="secondary" label="Cameras" onPress={() => router.push('/cameras')} />}
     <PrimaryButton variant="secondary" label="Profile and properties" onPress={() => router.push('/profile')} />
     <PrimaryButton variant="secondary" label="Settings" onPress={() => router.push('/settings')} />
     <QueryState query={summary} />
@@ -30,6 +33,6 @@ export function HomeScreen() {
     <Text style={ui.heading}>Recent security alerts</Text>
     <QueryState query={events} empty={!recent.length} />
     {!events.isError && recent.map(event => <EventCard key={event.id} event={event} cameraName={cameras.data?.find(c => c.id === event.camera_id)?.name} />)}
-    <PrimaryButton variant="secondary" label="Refresh overview" disabled={!propertyId || summary.isFetching || events.isFetching} onPress={() => { void summary.refetch(); void cameras.refetch(); void events.refetch(); }} />
+    <PrimaryButton variant="secondary" label="Refresh overview" disabled={!propertyId || refreshing} onPress={refresh} />
   </Screen>;
 }

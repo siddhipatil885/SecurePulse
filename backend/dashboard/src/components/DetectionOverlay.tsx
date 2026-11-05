@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useState } from 'react';
 import type { PersonTrack } from '../types';
+import { projectBox } from './overlayGeometry';
 import './DetectionOverlay.css';
 
 interface DetectionOverlayProps {
@@ -40,36 +41,21 @@ function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[], f
   const containerHeight = container.clientHeight;
   if (!containerWidth || !containerHeight) return [];
 
-  // The video uses object-fit: cover. Its displayed rectangle may extend
-  // beyond the container, so map detector coordinates through that rectangle
-  // rather than the browser viewport. Frigate boxes are pixel coordinates;
-  // recover their pixel positions from the track's normalization dimensions,
-  // then rescale to the intrinsic video size if those dimensions differ.
+  // Backend boxes are already normalized to the detector frame. Map them
+  // through the video's displayed rectangle, including cover/contain offsets.
+  // Multiplying by detector dimensions again misaligns higher-resolution video.
   return tracks.flatMap((track) => {
     if (!track.boundingBox) return [];
     const sourceWidth = video.videoWidth || track.frameWidth;
     const sourceHeight = video.videoHeight || track.frameHeight;
     if (!sourceWidth || !sourceHeight) return [];
-    const scale = fitMode === 'contain'
-      ? Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight)
-      : Math.max(containerWidth / sourceWidth, containerHeight / sourceHeight);
-    const renderedWidth = sourceWidth * scale;
-    const renderedHeight = sourceHeight * scale;
-    const offsetX = (containerWidth - renderedWidth) / 2;
-    const offsetY = (containerHeight - renderedHeight) / 2;
-    const box = track.boundingBox;
-    const sourceBox = {
-      x: box.x * track.frameWidth / sourceWidth,
-      y: box.y * track.frameHeight / sourceHeight,
-      width: box.width * track.frameWidth / sourceWidth,
-      height: box.height * track.frameHeight / sourceHeight,
-    };
+    const box = projectBox(track.boundingBox, containerWidth, containerHeight, sourceWidth, sourceHeight, fitMode);
     return [{
       track,
-      left: offsetX + sourceBox.x * renderedWidth,
-      top: offsetY + sourceBox.y * renderedHeight,
-      width: sourceBox.width * renderedWidth,
-      height: sourceBox.height * renderedHeight,
+      left: box.x,
+      top: box.y,
+      width: box.width,
+      height: box.height,
     }];
   });
 }
@@ -101,6 +87,7 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ video, tracks, debu
         <div
           className={`detection-box detection-box-${track.objectType.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`}
           key={track.trackId}
+          data-track-id={track.trackId}
           style={{ left, top, width, height, '--detection-color': objectColor(track.objectType) } as React.CSSProperties}
         >
           <span className="person-box-label">

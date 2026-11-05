@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.exceptions import ApplicationError
 from app.database.base import Base
 from app.models import (Assignment, AssignmentEvent, Camera, MarshalAvailability, MarshalProfile,
-    NotificationAttempt, NotificationOutbox, Property, PropertyMembership, SecurityEvent, User)
+    NotificationAttempt, NotificationOutbox, Property, PropertyMembership, ReporterIncident,
+    SecurityEvent, User)
 from app.repositories.dispatch import OutboxRepository
 from app.services.dispatch_service import DispatchService
 from app.services.dispatch_workers import DeliveryResult, NotificationDispatcher
@@ -35,6 +36,10 @@ async def factory():
             SecurityEvent(id=1, property_id=1, camera_id=1, event_type="INTRUSION", object_type="person",
                 confidence=.9, timestamp=datetime.now(timezone.utc), severity="HIGH", status="OPEN",
                 event_metadata={})])
+        session.add(ReporterIncident(
+            id=1, reporter_user_id=1, property_id=1, incident_type="THEFT",
+            address="1 Test Street", status="RECEIVED", idempotency_key="reporter-incident-1",
+        ))
         await session.commit()
     yield sessions
     await engine.dispose()
@@ -50,6 +55,19 @@ async def test_offer_history_and_outbox_are_created_together(factory):
         assert await session.scalar(select(func.count(AssignmentEvent.id))) == 1
         outbox = await session.scalar(select(NotificationOutbox))
         assert outbox and outbox.kind == "ASSIGNMENT_OFFERED"
+
+
+@pytest.mark.asyncio
+async def test_offer_can_target_reporter_incident(factory):
+    async with factory() as session:
+        offer = await DispatchService(session).create_offer(
+            reporter_incident_id=1, property_id=1, marshal_profile_id=1,
+            expires_in_seconds=60, idempotency_key="reporter-offer-1",
+            actor_subject="dispatcher:1",
+        )
+        await session.commit()
+        assert offer.reporter_incident_id == 1
+        assert offer.security_event_id is None
 
 
 @pytest.mark.asyncio

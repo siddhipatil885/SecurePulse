@@ -4,9 +4,10 @@ import './DataPanels.css';
 
 interface ActiveAlertsProps {
   alerts: SecurityAlert[];
+  onSelect: (id: string) => void;
 }
 
-const ActiveAlerts: React.FC<ActiveAlertsProps> = ({ alerts }) => {
+const ActiveAlerts: React.FC<ActiveAlertsProps> = ({ alerts, onSelect }) => {
   return (
     <div className="data-panel">
       <div className="panel-header">
@@ -26,6 +27,7 @@ const ActiveAlerts: React.FC<ActiveAlertsProps> = ({ alerts }) => {
                   </div>
                   <div className="alert-details">
                     <div className="alert-type">{alert.type}</div>
+                    <button className="incident-link" onClick={() => onSelect(alert.id)}>View incident #{alert.id}</button>
                     <div className="alert-meta">
                       <span className="alert-camera">{alert.cameraId}</span>
                       <span className="alert-time">{time}</span>

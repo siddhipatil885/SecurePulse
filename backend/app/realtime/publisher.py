@@ -15,6 +15,7 @@ class EventPublisher(Protocol):
     async def publish_tracks(
         self, camera_id: str, tracks: list[dict[str, object]], property_id: int | None = None
     ) -> None: ...
+    async def publish_case(self, property_id: int, key: str) -> None: ...
 
 
 class InMemoryEventPublisher:
@@ -36,6 +37,16 @@ class InMemoryEventPublisher:
 
     async def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
         self._subscribers.pop(queue, None)
+
+    async def publish_case(self, property_id: int, key: str) -> None:
+        payload = {"type": "case_updated", "property_id": property_id, "data": {"key": key}}
+        for queue, property_ids in tuple(self._subscribers.items()):
+            if property_ids is not None and property_id not in property_ids:
+                continue
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                logger.warning("Dropped case update for a slow subscriber")
 
     async def publish(self, event: SecurityEvent) -> None:
         payload = {

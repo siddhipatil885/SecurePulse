@@ -16,10 +16,10 @@ const CameraStatus: React.FC<CameraStatusProps> = ({ cameras }) => {
         <div className="camera-list">
           {cameras.map(cam => (
             <div key={cam.id} className="camera-status-item">
-              <div className="camera-status-name">{cam.id}</div>
+              <div className="camera-status-name">{cam.name}</div>
               <div className={`camera-status-indicator ${cam.status}`}>
                 <span className="status-dot"></span>
-                {cam.status === 'enabled' ? 'Enabled' : 'Disabled'}
+                {cam.status === 'disabled' ? 'Disabled' : cam.healthStatus ?? 'unknown'}
               </div>
             </div>
           ))}

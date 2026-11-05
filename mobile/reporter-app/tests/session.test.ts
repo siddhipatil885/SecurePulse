@@ -12,6 +12,17 @@ function fixture() {
   return { session, api, storage, clear, stored: () => stored };
 }
 describe('secure session lifecycle', () => {
+  it('does not restore private profile data when a refresh finishes after logout', async () => {
+    const { session, api } = fixture();
+    await session.login('test', 'password');
+    let finish!: (value: typeof profile) => void;
+    vi.mocked(api.profile).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refresh = session.refreshProfile();
+    await session.logout();
+    finish(profile); await refresh;
+    expect(session.snapshot().profile).toBeNull();
+    expect(session.snapshot().token).toBeNull();
+  });
   it('does not authenticate an empty session', async () => {
     const { session, api } = fixture(); await session.restore();
     expect(session.snapshot()).toMatchObject({ loading: false, token: null, profile: null });

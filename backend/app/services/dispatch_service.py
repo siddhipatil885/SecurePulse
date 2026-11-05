@@ -1,11 +1,11 @@
 """Property-authorized, race-safe assignment orchestration."""
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from app.core.exceptions import ApplicationError
 from app.models import (Assignment, MarshalAvailability, MarshalProfile,
-    NotificationOutbox, PropertyMembership, SecurityEvent, User)
+    NotificationOutbox, PropertyMembership, ReporterIncident, SecurityEvent, User)
 from app.repositories.dispatch import DispatchRepository
 
 
@@ -14,8 +14,7 @@ class DispatchService:
         self.session, self.repository = session, DispatchRepository(session)
 
     @staticmethod
-    def _same_request(existing: Assignment, *, property_id: int, incident_id: int,
-                      marshal_profile_id: int, expires_in_seconds: int) -> bool:
+    def _same_offer(existing, *, property_id, incident_id, reporter_incident_id, marshal_profile_id, expires_in_seconds):
         offered_at = existing.offered_at
         expires_at = existing.expires_at
         if offered_at.tzinfo is None and expires_at.tzinfo is not None:
@@ -23,34 +22,45 @@ class DispatchService:
         elif expires_at.tzinfo is None and offered_at.tzinfo is not None:
             expires_at = expires_at.replace(tzinfo=offered_at.tzinfo)
         duration_matches = abs((expires_at - offered_at).total_seconds() - expires_in_seconds) <= 1
-        return (existing.property_id, existing.security_event_id, existing.marshal_profile_id) == (
-            property_id, incident_id, marshal_profile_id
-        ) and duration_matches
+        if not duration_matches or (existing.property_id, existing.security_event_id, existing.reporter_incident_id, existing.marshal_profile_id) != (
+                property_id, incident_id, reporter_incident_id, marshal_profile_id):
+            raise ApplicationError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request.", 409)
+        return existing
 
-    async def create_offer(self, *, incident_id: int, property_id: int, marshal_profile_id: int,
+    @staticmethod
+    def _capacity_filter(now):
+        return or_(Assignment.status.in_(["ACCEPTED", "EN_ROUTE", "ON_SCENE"]),
+                   and_(Assignment.status == "OFFERED", Assignment.expires_at > now))
+
+    async def create_offer(self, *, incident_id: int | None = None,
+                           reporter_incident_id: int | None = None, property_id: int,
+                           marshal_profile_id: int,
                            expires_in_seconds: int, idempotency_key: str,
                            actor_subject: str) -> Assignment:
+        if (incident_id is None) == (reporter_incident_id is None):
+            raise ApplicationError("INVALID_INCIDENT_SOURCE", "Exactly one incident source is required.", 422)
         existing = await self.repository.find_by_idempotency_key(idempotency_key)
         if existing:
-            if not self._same_request(existing, property_id=property_id, incident_id=incident_id,
-                                      marshal_profile_id=marshal_profile_id,
-                                      expires_in_seconds=expires_in_seconds):
-                raise ApplicationError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request.", 409)
-            return existing
-        incident = await self.session.scalar(select(SecurityEvent).where(SecurityEvent.id == incident_id,
-            SecurityEvent.property_id == property_id).with_for_update())
+            return self._same_offer(existing, property_id=property_id, incident_id=incident_id,
+                reporter_incident_id=reporter_incident_id, marshal_profile_id=marshal_profile_id, expires_in_seconds=expires_in_seconds)
+        if incident_id is not None:
+            incident = await self.session.scalar(select(SecurityEvent).where(
+                SecurityEvent.id == incident_id, SecurityEvent.property_id == property_id
+            ).with_for_update())
+        else:
+            incident = await self.session.scalar(select(ReporterIncident).where(
+                ReporterIncident.id == reporter_incident_id, ReporterIncident.property_id == property_id
+            ).with_for_update())
         if incident is None:
             raise ApplicationError("NOT_FOUND", "Incident not found for this property.", 404)
-        if incident.status not in {"OPEN", "ACKNOWLEDGED"}:
-            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Only open incidents can be dispatched.", 409)
         existing = await self.repository.find_by_idempotency_key(idempotency_key)
         if existing:
-            if not self._same_request(existing, property_id=property_id, incident_id=incident_id,
-                                      marshal_profile_id=marshal_profile_id,
-                                      expires_in_seconds=expires_in_seconds):
-                raise ApplicationError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request.", 409)
-            return existing
-        active = await self.session.scalar(select(Assignment).where(Assignment.security_event_id == incident_id,
+            return self._same_offer(existing, property_id=property_id, incident_id=incident_id,
+                reporter_incident_id=reporter_incident_id, marshal_profile_id=marshal_profile_id, expires_in_seconds=expires_in_seconds)
+        if incident.status not in {"OPEN", "ACKNOWLEDGED", "RECEIVED"}:
+            raise ApplicationError("INCIDENT_CLOSED", "Only open or acknowledged incidents can be dispatched.", 409)
+        source_filter = Assignment.security_event_id == incident_id if incident_id is not None else Assignment.reporter_incident_id == reporter_incident_id
+        active = await self.session.scalar(select(Assignment).where(source_filter,
             Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])))
         if active:
             raise ApplicationError("ACTIVE_ASSIGNMENT_EXISTS", "This incident already has an active assignment.", 409)
@@ -72,39 +82,36 @@ class DispatchService:
             raise ApplicationError("MARSHAL_UNAVAILABLE", "Marshal availability is absent or stale.", 409)
         count = await self.session.scalar(select(func.count(Assignment.id)).where(
             Assignment.marshal_profile_id == profile.id,
-            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])))
+            self._capacity_filter(now)))
         if (count or 0) >= profile.capacity:
             raise ApplicationError("MARSHAL_AT_CAPACITY", "Marshal has reached assignment capacity.", 409)
         offer = Assignment(property_id=property_id, security_event_id=incident_id,
+            reporter_incident_id=reporter_incident_id,
             marshal_profile_id=marshal_profile_id, status="OFFERED",
+            offered_at=now,
             expires_at=now + timedelta(seconds=expires_in_seconds), idempotency_key=idempotency_key)
         try:
-            return await self.repository.add_offer(offer, actor_subject=actor_subject,
-                correlation_id=idempotency_key)
+            async with self.session.begin_nested():
+                return await self.repository.add_offer(offer, actor_subject=actor_subject,
+                    correlation_id=idempotency_key)
         except IntegrityError:
-            # The unique idempotency key and one-active-offer index are the
-            # final concurrency guard when simultaneous requests pass the reads.
-            await self.session.rollback()
             existing = await self.repository.find_by_idempotency_key(idempotency_key)
-            if existing is not None:
-                if self._same_request(existing, property_id=property_id, incident_id=incident_id,
-                                      marshal_profile_id=marshal_profile_id,
-                                      expires_in_seconds=expires_in_seconds):
-                    return existing
-                raise ApplicationError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request.", 409)
-            active = await self.session.scalar(select(Assignment).where(
-                Assignment.security_event_id == incident_id,
-                Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])))
+            if existing:
+                return self._same_offer(existing, property_id=property_id, incident_id=incident_id,
+                    reporter_incident_id=reporter_incident_id, marshal_profile_id=marshal_profile_id, expires_in_seconds=expires_in_seconds)
+            active = await self.session.scalar(select(Assignment.id).where(source_filter,
+                Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).limit(1))
             if active is not None:
                 raise ApplicationError("ACTIVE_ASSIGNMENT_EXISTS", "This incident already has an active assignment.", 409)
-            raise
+            raise ApplicationError("DISPATCH_CONFLICT", "Another assignment changed this incident. Reload before retrying.", 409) from None
 
     async def respond(self, *, offer_id: int, user_id: int, accept: bool,
                       expected_version: int, actor_subject: str) -> Assignment:
         offer = await self.repository.lock_offer(offer_id)
         if offer is None:
             raise ApplicationError("NOT_FOUND", "Assignment offer not found.", 404)
-        profile = await self.session.get(MarshalProfile, offer.marshal_profile_id)
+        profile = await self.session.scalar(select(MarshalProfile).where(
+            MarshalProfile.id == offer.marshal_profile_id).with_for_update())
         if profile is None or profile.user_id != user_id:
             raise ApplicationError("NOT_FOUND", "Assignment offer not found.", 404)
         now = datetime.now(timezone.utc)
@@ -113,6 +120,14 @@ class DispatchService:
             raise ApplicationError("OFFER_CONFLICT", "The offer has already changed.", 409)
         if expires <= now:
             raise ApplicationError("OFFER_EXPIRED", "The assignment offer has expired.", 409)
+        if accept:
+            if not profile.active:
+                raise ApplicationError("MARSHAL_UNAVAILABLE", "Marshal profile is disabled.", 409)
+            count = await self.session.scalar(select(func.count(Assignment.id)).where(
+                Assignment.marshal_profile_id == profile.id, Assignment.id != offer.id,
+                self._capacity_filter(now)))
+            if (count or 0) >= profile.capacity:
+                raise ApplicationError("MARSHAL_AT_CAPACITY", "Marshal has reached assignment capacity.", 409)
         return await self.repository.transition(offer, status="ACCEPTED" if accept else "DECLINED",
             now=now, actor_subject=actor_subject, correlation_id=f"response:{offer.id}:{expected_version}")
 
@@ -133,6 +148,7 @@ class DispatchService:
             security_event_id=offer.security_event_id, kind="DISPATCH_ESCALATION_REQUIRED",
             destination=f"property:{offer.property_id}:dispatchers",
             payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
+                     "reporter_incident_id": offer.reporter_incident_id,
                      "reason": "offer_expired"},
             dedupe_key=f"assignment:{offer.id}:escalation:{offer.version}", status="PENDING"))
         await self.session.flush()
@@ -152,12 +168,17 @@ class DispatchService:
         transitions = {"EN_ROUTE": ("ACCEPTED",), "ON_SCENE": ("EN_ROUTE",), "COMPLETED": ("ON_SCENE",)}
         if status not in transitions:
             raise ApplicationError("INVALID_ASSIGNMENT_TRANSITION", "Unsupported marshal progress state.", 409)
-        offer = await self.repository.lock_offer(offer_id)
+        offer = await self.session.get(Assignment, offer_id)
         if offer is None:
             raise ApplicationError("NOT_FOUND", "Assignment offer not found.", 404)
         profile = await self.session.get(MarshalProfile, offer.marshal_profile_id)
         if profile is None or profile.user_id != user_id:
             raise ApplicationError("NOT_FOUND", "Assignment offer not found.", 404)
+        # Use the same source -> assignment lock order as operator cancellation.
+        model = SecurityEvent if offer.security_event_id is not None else ReporterIncident
+        source_id = offer.security_event_id if offer.security_event_id is not None else offer.reporter_incident_id
+        await self.session.scalar(select(model).where(model.id == source_id).with_for_update())
+        offer = await self.repository.lock_offer(offer_id)
         if offer.version != expected_version or offer.status not in transitions[status]:
             raise ApplicationError("OFFER_CONFLICT", f"Cannot move assignment from {offer.status} to {status}.", 409)
         now = datetime.now(timezone.utc)
@@ -165,5 +186,6 @@ class DispatchService:
             actor_subject=actor_subject, correlation_id=f"progress:{offer.id}:{expected_version}")
         if status == "COMPLETED":
             await self.repository.resolve_incident(offer.security_event_id,
+                reporter_incident_id=offer.reporter_incident_id,
                 actor_subject=actor_subject, correlation_id=f"progress:{offer.id}:{result.version}")
         return result

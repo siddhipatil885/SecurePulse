@@ -26,6 +26,8 @@ const routes = {
   '(app)/profile': () => <Text>Profile screen</Text>,
   '(app)/settings': () => <Text>Settings screen</Text>,
   '(app)/report': () => <Text>Report screen</Text>,
+  '(app)/incidents/index': () => <Text>Incident history</Text>,
+  '(app)/incidents/[id]': () => <Text>Incident detail</Text>,
 };
 
 it('redirects an unauthenticated deep link to sign-in', () => {

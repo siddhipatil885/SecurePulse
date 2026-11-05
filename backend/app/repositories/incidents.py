@@ -4,13 +4,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evidence import Evidence
-from app.models.operations import AuditRecord, IncidentStatusHistory
+from app.models.operations import Assignment, AuditRecord, IncidentStatusHistory
 from app.models.security_event import SecurityEvent
 
 
 class IncidentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def has_active_assignment(self, incident_id: int) -> bool:
+        return await self.session.scalar(select(Assignment.id).where(
+            Assignment.security_event_id == incident_id,
+            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).limit(1)) is not None
 
     async def get_for_update(
         self, incident_id: int, property_ids: frozenset[int] | None

@@ -1,12 +1,21 @@
 import { type PropsWithChildren } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export function Screen({ children }: PropsWithChildren) {
+interface ScreenProps extends PropsWithChildren {
+  refreshing?: boolean;
+  onRefresh?: () => void;
+}
+
+export function Screen({ children, refreshing = false, onRefresh }: ScreenProps) {
   const insets = useSafeAreaInsets();
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={100}>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: insets.bottom }]}>
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} /> : undefined}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom }]}
+    >
       <View style={styles.container}>{children}</View>
     </ScrollView>
     </KeyboardAvoidingView>

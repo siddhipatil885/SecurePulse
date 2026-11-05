@@ -21,7 +21,7 @@ from app.core.exceptions import ApplicationError
 from app.core.reporter_auth import hash_password
 from app.database.base import Base
 from app.main import app
-from app.models import Alert, Camera, Property, PropertyMembership, SecurityEvent, User
+from app.models import Alert, AuditRecord, Camera, Property, PropertyMembership, ReporterIncident, SecurityEvent, User
 
 SECRET = "reporter-test-only-secret-with-32-characters"
 PASSWORD = "isolated-test-password"
@@ -207,3 +207,207 @@ async def test_provisioning_is_atomic_and_does_not_reassign_cameras(fixture, mon
     assert [camera["id"] for camera in cameras.json()] == [2, 3]
     with pytest.raises(ValueError, match="already exists"):
         await provision(args, PASSWORD)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('revocation', ['membership', 'role', 'property'])
+async def test_manual_reports_and_grants_require_current_property_access(fixture, monkeypatch, tmp_path, revocation):
+    client, factory, settings = fixture
+    settings.evidence_root = str(tmp_path)
+    monkeypatch.setattr('app.api.reporter.get_settings', lambda: settings)
+    headers = {'Authorization': 'Bearer ' + await sign_in(client)}
+    created = await client.post('/api/v1/reporter/incidents', headers=headers | {'X-Idempotency-Key': 'revocation-test-report'},
+        json={'property_id': 1, 'incident_type': 'THEFT', 'address': 'Test address'})
+    assert created.status_code == 201, created.text
+    incident_id = created.json()['id']
+    uploaded = await client.post(f'/api/v1/reporter/incidents/{incident_id}/evidence', headers=headers,
+        files={'file': ('photo.jpg', b'\xff\xd8\xff\xe0test', 'image/jpeg')})
+    evidence_id = uploaded.json()['evidence'][0]['id']
+    grant = await client.post(f'/api/v1/reporter/incidents/{incident_id}/evidence/{evidence_id}/access', headers=headers)
+    assert grant.status_code == 200
+    async with factory() as session:
+        if revocation == 'property':
+            await session.execute(update(Property).where(Property.id == 1).values(active=False))
+        else:
+            values = {'active': False} if revocation == 'membership' else {'role': 'marshal'}
+            await session.execute(update(PropertyMembership).where(PropertyMembership.user_id == 1).values(**values))
+        await session.commit()
+    assert (await client.get(f'/api/v1/reporter/incidents/{incident_id}', headers=headers)).status_code == 404
+    assert (await client.get('/api/v1/reporter/incidents', headers=headers)).json()['total'] == 0
+    assert (await client.get(grant.json()['url'], headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reporter_can_create_idempotent_owned_incident_and_upload_image(fixture, monkeypatch, tmp_path):
+    client, factory, settings = fixture
+    settings.evidence_root = str(tmp_path)
+    monkeypatch.setattr("app.api.reporter.get_settings", lambda: settings)
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    payload = {
+        "property_id": 1,
+        "incident_type": "THEFT",
+        "description": "A package was taken from the entrance.",
+        "address": "1 Test Street",
+    }
+    first = await client.post(
+        "/api/v1/reporter/incidents",
+        json=payload,
+        headers=headers | {"X-Idempotency-Key": "reporter-test-key-001"},
+    )
+    assert first.status_code == 201, first.text
+    incident = first.json()
+    duplicate = await client.post(
+        "/api/v1/reporter/incidents",
+        json=payload,
+        headers=headers | {"X-Idempotency-Key": "reporter-test-key-001"},
+    )
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == incident["id"]
+    upload = await client.post(
+        f"/api/v1/reporter/incidents/{incident['id']}/evidence",
+        files={"file": ("photo.jpg", b"\xff\xd8\xff\xe0test", "image/jpeg")},
+        headers=headers,
+    )
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["evidence"][0]["original_filename"] == "photo.jpg"
+    detail = await client.get(f"/api/v1/reporter/incidents/{incident['id']}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["timeline"][0]["status"] == "RECEIVED"
+    async with factory() as session:
+        stored = await session.scalar(select(ReporterIncident).where(ReporterIncident.id == incident["id"]))
+        assert stored is not None
+        assert stored.reporter_user_id == 1
+
+
+@pytest.mark.asyncio
+async def test_reporter_evidence_grant_is_owned_short_lived_and_audited(fixture, monkeypatch, tmp_path):
+        client, factory, settings = fixture
+        settings.evidence_root = str(tmp_path)
+        monkeypatch.setattr("app.api.reporter.get_settings", lambda: settings)
+        headers = {"Authorization": "Bearer " + await sign_in(client)}
+        created = await client.post(
+            "/api/v1/reporter/incidents",
+            json={"property_id": 1, "incident_type": "THEFT", "address": "1 Test Street"},
+            headers=headers | {"X-Idempotency-Key": "reporter-evidence-grant-01"},
+        )
+        incident_id = created.json()["id"]
+        uploaded = await client.post(
+            f"/api/v1/reporter/incidents/{incident_id}/evidence",
+            files={"file": ("photo.jpg", b"\xff\xd8\xff\xe0test", "image/jpeg")},
+            headers=headers,
+        )
+        evidence_id = uploaded.json()["evidence"][0]["id"]
+        grant = await client.post(
+            f"/api/v1/reporter/incidents/{incident_id}/evidence/{evidence_id}/access",
+            headers=headers,
+        )
+        assert grant.status_code == 200
+        media = await client.get(grant.json()["url"], headers=headers)
+        assert media.status_code == 200
+        assert media.content.startswith(b"\xff\xd8")
+        invalid = await client.get(
+            f"/api/v1/reporter/incidents/{incident_id}/evidence/{evidence_id}/content?grant=invalid",
+            headers=headers,
+        )
+        assert invalid.status_code == 401
+        async with factory() as session:
+            actions = set((await session.scalars(select(AuditRecord.action))).all())
+            assert {"REPORTER_EVIDENCE_ACCESS_GRANTED", "REPORTER_EVIDENCE_CONTENT_ACCESSED"} <= actions
+
+
+@pytest.mark.asyncio
+async def test_reporter_incident_rejects_cross_property_and_missing_location(fixture):
+    client, _, _ = fixture
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    forbidden = await client.post(
+        "/api/v1/reporter/incidents",
+        json={"property_id": 2, "incident_type": "THEFT", "address": "Other property"},
+        headers=headers | {"X-Idempotency-Key": "reporter-cross-property-001"},
+    )
+    assert forbidden.status_code == 403
+    invalid = await client.post(
+        "/api/v1/reporter/incidents",
+        json={"property_id": 1, "incident_type": "THEFT"},
+        headers=headers | {"X-Idempotency-Key": "reporter-missing-location-001"},
+    )
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reporter_incident_history_supports_status_filter(fixture):
+    client, _, _ = fixture
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    response = await client.get(
+        "/api/v1/reporter/incidents?status=RECEIVED",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert all(item["status"] == "RECEIVED" for item in response.json()["items"])
+    invalid_status = await client.get(
+        "/api/v1/reporter/incidents?status=" + ("x" * 33),
+        headers=headers,
+    )
+    assert invalid_status.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reporter_device_registration_and_preferences_are_account_scoped(fixture):
+    client, _, _ = fixture
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    registered = await client.post(
+        "/api/v1/reporter/devices",
+        json={"device_id": "ios-test-device", "push_token": "ExponentPushToken[test]", "provider": "expo"},
+        headers=headers,
+    )
+    assert registered.status_code == 204
+    preference = await client.put(
+        "/api/v1/reporter/notification-preferences",
+        json={"category": "INCIDENT_UPDATES", "enabled": False},
+        headers=headers,
+    )
+    assert preference.status_code == 200
+    assert preference.json()["enabled"] is False
+    preferences = await client.get("/api/v1/reporter/notification-preferences", headers=headers)
+    assert preferences.json()[0]["category"] == "INCIDENT_UPDATES"
+    assert (await client.delete("/api/v1/reporter/devices/ios-test-device", headers=headers)).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_reporter_can_update_profile_and_rotate_password(fixture):
+    client, factory, _ = fixture
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    updated = await client.put("/api/v1/auth/profile", json={"name": "Updated Reporter"}, headers=headers)
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Updated Reporter"
+    changed = await client.post("/api/v1/auth/password", json={
+        "current_password": PASSWORD, "new_password": "new-isolated-password",
+    }, headers=headers)
+    assert changed.status_code == 204
+    assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
+    login = await client.post("/api/v1/auth/login", json={"email": "owner@example.test", "password": "new-isolated-password"})
+    assert login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reporter_can_review_owned_active_alert_once(fixture):
+    client, factory, _ = fixture
+    headers = {"Authorization": "Bearer " + await sign_in(client)}
+    before = await client.get("/api/v1/reporter/events/1?property_id=1", headers=headers)
+    assert before.status_code == 200
+    assert before.json()["alert_status"] == "ACTIVE"
+    reviewed = await client.post(
+        "/api/v1/reporter/events/1/review?property_id=1",
+        json={"decision": "CONFIRMED"},
+        headers=headers,
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.json()["alert_status"] == "CONFIRMED"
+    conflict = await client.post(
+        "/api/v1/reporter/events/1/review?property_id=1",
+        json={"decision": "FALSE_ALARM"},
+        headers=headers,
+    )
+    assert conflict.status_code == 409
+    async with factory() as session:
+        alert = await session.scalar(select(Alert).where(Alert.id == 1))
+        assert alert and alert.reviewed_by == "reporter:1"
