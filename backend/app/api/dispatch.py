@@ -8,8 +8,8 @@ from app.core.exceptions import ApplicationError
 from app.core.reporter_auth import get_reporter
 from app.models import MarshalAvailability, MarshalProfile, Property, PropertyMembership, User
 from app.repositories.dispatch import DispatchRepository
-from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, EligibleMarshal,
-    OfferCreate, OfferResponse, OfferView)
+from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, DispatchOutcome,
+    DispatchRequest, EligibleMarshal, OfferCreate, OfferResponse, OfferView)
 from app.services.dispatch_service import DispatchService
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
@@ -68,6 +68,21 @@ async def create_offer(body: OfferCreate, user: User = Depends(get_reporter),
     await session.commit()
     await publish_assignment_update(offer)
     return offer
+
+
+@router.post("/incidents/{incident_id}/dispatch", response_model=DispatchOutcome)
+async def dispatch_next_marshal(incident_id: int, body: DispatchRequest,
+                                user: User = Depends(get_reporter),
+                                session: AsyncSession = Depends(get_session)):
+    await require_role(session, user.id, body.property_id, {"owner", "dispatcher"})
+    offer = await DispatchService(session).dispatch_next(incident_id=incident_id,
+        property_id=body.property_id, expires_in_seconds=body.expires_in_seconds,
+        actor_subject=f"reporter:{user.id}", correlation_id=body.correlation_id)
+    await session.commit()
+    if offer is None:
+        return DispatchOutcome(status="ESCALATED", incident_id=incident_id,
+            reason="No eligible marshal or the provisional offer-attempt limit was reached")
+    return DispatchOutcome(status="OFFERED", incident_id=incident_id, assignment=offer)
 
 
 async def _respond(offer_id: int, body: OfferResponse, accept: bool,

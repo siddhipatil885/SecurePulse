@@ -1,104 +1,115 @@
-"""
-Rule: ZONE_ENTRY
-
-Triggers when a person transitions from **outside** a restricted zone to
-**inside** it.  Repeated detections while the person *remains* inside do
-NOT generate new events — only the transition fires.
-
-State key: ``(camera_id, object_id, zone_id)``
-
-When the person leaves the zone the state is cleared so that a future
-re-entry can trigger a new event.
-"""
+"""Configurable person-entry decisions for camera-specific restricted zones."""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Tuple
 
-from app.security.models import (
-    EventType,
-    SecurityContext,
-    SecurityRuleResult,
-    Severity,
-)
+from app.security.models import EventType, Point, SecurityContext, SecurityRuleResult
 from app.security.rules.base import SecurityRule
 from app.security.zones.geometry import is_point_inside_polygon
 
 logger = logging.getLogger(__name__)
 
-# (camera_id, object_id, zone_id) → was_inside_last_frame
 _ZoneStateKey = Tuple[str, str, str]
 
 
+@dataclass
+class _ZoneState:
+    entered_at: datetime
+    last_seen_at: datetime
+    emitted: bool = False
+
+
 class ZoneEntryRule(SecurityRule):
-    """Detect outside → inside transitions for restricted zones."""
+    """Detect restricted-zone entry after per-zone confidence and dwell rules."""
 
     def __init__(self) -> None:
-        # Tracks whether each (camera, object, zone) was inside on the
-        # previous evaluation.  ``True`` means the object was inside.
-        self._zone_state: Dict[_ZoneStateKey, bool] = {}
-
-    # ------------------------------------------------------------------
-    # SecurityRule interface
-    # ------------------------------------------------------------------
+        self._zone_state: Dict[_ZoneStateKey, _ZoneState] = {}
 
     def evaluate(self, context: SecurityContext) -> SecurityRuleResult | None:
         detection = context.detection
-
-        if detection.object_type != "person":
+        if detection.object_type != "person" or detection.bbox is None:
             return None
 
-        if detection.bbox is None:
-            return None
-
+        now = context.current_time or detection.timestamp
         ground = detection.bbox.bottom_center()
-        result: SecurityRuleResult | None = None
-
         for zone in context.zones:
+            if detection.confidence < zone.minimum_confidence:
+                # Low-confidence geometry is unknown; it must not mark a
+                # tracked person as having left the zone.
+                continue
+
+            polygon = zone.polygon
+            if zone.frame_width is not None:
+                if detection.frame_width is None or detection.frame_height is None:
+                    logger.warning("Zone evaluation skipped: frame dimensions missing", extra={
+                        "camera_id": detection.camera_id, "zone_id": zone.id,
+                    })
+                    continue
+                scale_x = detection.frame_width / zone.frame_width
+                scale_y = detection.frame_height / zone.frame_height
+                polygon = [Point(x=point.x * scale_x, y=point.y * scale_y)
+                           for point in zone.polygon]
+
             key: _ZoneStateKey = (detection.camera_id, detection.object_id, zone.id)
-            is_inside = is_point_inside_polygon(ground, zone.polygon)
-            was_inside = self._zone_state.get(key, False)
+            inside = is_point_inside_polygon(ground, polygon)
+            state = self._zone_state.get(key)
 
-            if is_inside and not was_inside:
-                # Transition: outside → inside
-                logger.info(
-                    "Zone entry detected: camera=%s zone=%s object=%s",
-                    detection.camera_id,
-                    zone.id,
-                    detection.object_id,
-                )
-                result = SecurityRuleResult(
-                    triggered=True,
-                    event_type=EventType.ZONE_ENTRY,
-                    severity=Severity.MEDIUM,
-                    reason=f"Person entered restricted zone '{zone.name}'",
-                    camera_id=detection.camera_id,
-                    object_id=detection.object_id,
-                    zone_id=zone.id,
-                )
+            if state is not None and now < state.last_seen_at:
+                # Out-of-order updates never move track state backwards.
+                continue
 
-            # Update state (including inside→inside or outside→outside)
-            self._zone_state[key] = is_inside
+            if not inside:
+                self._zone_state.pop(key, None)
+                continue
+            if state is None:
+                state = _ZoneState(entered_at=now, last_seen_at=now)
+                self._zone_state[key] = state
+            else:
+                state.last_seen_at = now
 
-        return result
+            dwell = max(0.0, (now - state.entered_at).total_seconds())
+            restricted = zone.is_restricted_at(now)
+            if state.emitted or not restricted or dwell < zone.minimum_dwell_seconds:
+                continue
+
+            state.emitted = True
+            logger.info("Restricted zone entry detected", extra={
+                "camera_id": detection.camera_id,
+                "zone_id": zone.id,
+                "object_id": detection.object_id,
+                "dwell_seconds": dwell,
+            })
+            return SecurityRuleResult(
+                triggered=True,
+                event_type=EventType.ZONE_ENTRY,
+                severity=zone.severity,
+                reason=f"Person entered restricted zone '{zone.name}'",
+                camera_id=detection.camera_id,
+                object_id=detection.object_id,
+                zone_id=zone.id,
+                metadata={
+                    "dwell_seconds": dwell,
+                    "minimum_dwell_seconds": zone.minimum_dwell_seconds,
+                    "minimum_confidence": zone.minimum_confidence,
+                    "policy_zone_id": zone.id,
+                },
+            )
+        return None
+
+    def end_event(self, context: SecurityContext) -> None:
+        self.remove_object(context.detection.camera_id, context.detection.object_id)
 
     def reset(self) -> None:
         self._zone_state.clear()
 
-    # ------------------------------------------------------------------
-    # Public helpers for other rules (e.g. LoiteringRule)
-    # ------------------------------------------------------------------
-
     def is_inside(self, camera_id: str, object_id: str, zone_id: str) -> bool:
-        """Return whether *object_id* is currently inside *zone_id*."""
-        return self._zone_state.get((camera_id, object_id, zone_id), False)
+        return (camera_id, object_id, zone_id) in self._zone_state
 
     def remove_object(self, camera_id: str, object_id: str) -> None:
-        """Purge all zone state for an object that has left the frame."""
-        keys_to_remove = [
-            k for k in self._zone_state
-            if k[0] == camera_id and k[1] == object_id
-        ]
-        for k in keys_to_remove:
-            del self._zone_state[k]
+        keys = [key for key in self._zone_state if key[:2] == (camera_id, object_id)]
+        for key in keys:
+            del self._zone_state[key]

@@ -67,3 +67,19 @@ async def test_plain_person_detection_is_informational_not_an_incident() -> None
     assert decision.event_type == "DETECTION"
     assert decision.severity == "INFO"
     assert decision.metadata["policy_version"] == "pilot-1"
+
+
+@pytest.mark.asyncio
+async def test_candidate_evidence_references_reach_backend_decision() -> None:
+    engine = LocalSecurityEngine(SecurityEngine(SecurityConfig()))
+    decision = await engine.evaluate(
+        SecurityContext(
+            camera_id=1,
+            object_type="person",
+            confidence=0.9,
+            timestamp=datetime(2026, 9, 19, tzinfo=timezone.utc),
+            evidence_refs=["frigate:event-1:snapshot"],
+        )
+    )
+
+    assert decision.metadata["evidence_refs"] == ["frigate:event-1:snapshot"]

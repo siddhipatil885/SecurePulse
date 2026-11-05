@@ -2,6 +2,7 @@
 
 import logging
 import inspect
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -18,7 +19,8 @@ from app.models.security_event import SecurityEvent
 from app.models.alert import Alert
 from app.models.track import Track
 from app.models.evidence import Evidence
-from app.models.operations import IncidentStatusHistory, NotificationOutbox, SourceEventReceipt
+from app.models.operations import (AuditRecord, IncidentStatusHistory, NotificationOutbox,
+    SourceEventReceipt)
 from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.realtime.publisher import EventPublisher
@@ -160,28 +162,34 @@ class EventProcessor:
             if lifecycle == "update" and self.security_engine is not None:
                 decision = await self._get_security_decision(detection, camera, track)
                 if decision is not None and decision.event_type != "DETECTION":
-                    incident = self._build_event(detection, camera, decision, track)
-                    incident.incident_key = self._incident_key(detection, decision, track)
-                    await self.event_repository.create(incident)
+                    incident_key = self._incident_key(detection, decision, track)
+                    incident = await self.event_repository.get_by_incident_key(
+                        incident_key, for_update=True
+                    )
+                    was_created = incident is None
+                    escalated = False
+                    if incident is None:
+                        incident = self._build_event(detection, camera, decision, track)
+                        incident.incident_key = incident_key
+                        await self.event_repository.create(incident)
+                        await self._add_initial_incident_records(incident, detection, lifecycle, revision)
+                        if incident.severity in {"HIGH", "CRITICAL"}:
+                            await self._add(Alert(camera_id=incident.camera_id,
+                                security_event_id=incident.id, severity=incident.severity,
+                                status="ACTIVE"))
+                    else:
+                        escalated = await self._apply_correlated_decision(
+                            incident, detection, decision, track
+                        )
                     receipt.security_event = incident
                     await self.event_repository.create_receipt(receipt)
-                    await self._add_initial_incident_records(incident, detection, lifecycle, revision)
-                    if incident.severity in {"HIGH", "CRITICAL"}:
-                        await self._add(
-                            Alert(
-                                camera_id=incident.camera_id,
-                                security_event_id=incident.id,
-                                severity=incident.severity,
-                                status="ACTIVE",
-                            )
-                        )
                     await self.session.commit()
-                    if self.publisher is not None:
+                    if escalated and self.publisher is not None:
                         try:
                             await self.publisher.publish(incident)
                         except Exception:
-                            logger.exception("Failed to publish committed security event")
-                    return EventProcessResult(event=incident, duplicate=False)
+                            logger.exception("Failed to publish committed incident escalation")
+                    return EventProcessResult(event=incident, duplicate=not was_created and not escalated)
             if lifecycle in {"update", "end"}:
                 previous_status = existing.status
                 existing.object_type = detection.object_type
@@ -359,12 +367,14 @@ class EventProcessor:
             )
         )
         if event.status == "OPEN":
+            incident_key = event.incident_key or detection.source_event_id
+            dedupe_hash = hashlib.sha256(incident_key.encode()).hexdigest()
             await self._add(
                 NotificationOutbox(
                     property_id=event.property_id,
                     security_event_id=event.id,
                     kind="INCIDENT_OPENED",
-                    dedupe_key=f"incident:{event.incident_key or detection.source_event_id}:opened",
+                    dedupe_key=f"incident:{dedupe_hash}:opened",
                     status="PENDING",
                     payload={
                         "camera_id": event.camera_id,
@@ -373,6 +383,57 @@ class EventProcessor:
                     },
                 )
             )
+
+    async def _apply_correlated_decision(
+        self,
+        incident: SecurityEvent,
+        detection: DetectionEvent,
+        decision: SecurityDecision,
+        track: TrackedPerson | None,
+    ) -> bool:
+        """Update evidence and emit one audited notification for severity increases."""
+        ranked = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+        incident.confidence = max(incident.confidence, detection.confidence)
+        incident.event_metadata = {
+            **(incident.event_metadata or {}),
+            **detection.metadata,
+            **self._track_metadata(track),
+            "security_decision": decision.model_dump(mode="json"),
+        }
+        if ranked.get(decision.severity, 0) <= ranked.get(incident.severity, 0):
+            return False
+
+        previous_severity = incident.severity
+        previous_event_type = incident.event_type
+        incident.severity = decision.severity
+        incident.event_type = decision.event_type
+        incident.score = decision.score
+        incident.reason = decision.reason
+        correlation_id = self._correlation_id(
+            detection, "severity_escalation", str(decision.metadata.get("policy_version", "0"))
+        )
+        await self._add(AuditRecord(property_id=incident.property_id,
+            actor_subject="system:security_engine", action="INCIDENT_SEVERITY_ESCALATED",
+            resource_type="security_event", resource_id=str(incident.id),
+            correlation_id=correlation_id,
+            details={"previous_severity": previous_severity,
+                     "new_severity": decision.severity,
+                     "previous_event_type": previous_event_type,
+                     "new_event_type": decision.event_type, "reason": decision.reason,
+                     "policy_version": decision.metadata.get("policy_version")}))
+        digest = hashlib.sha256((incident.incident_key or str(incident.id)).encode()).hexdigest()
+        await self._add(NotificationOutbox(property_id=incident.property_id,
+            security_event_id=incident.id, kind="INCIDENT_SEVERITY_ESCALATED",
+            destination=f"property:{incident.property_id}:dispatchers",
+            dedupe_key=f"incident:{digest}:severity:{decision.severity}", status="PENDING",
+            payload={"incident_id": incident.id, "previous_severity": previous_severity,
+                     "severity": decision.severity, "event_type": decision.event_type,
+                     "reason": decision.reason,
+                     "policy_version": decision.metadata.get("policy_version")}))
+        if incident.severity in {"HIGH", "CRITICAL"}:
+            await self._add(Alert(camera_id=incident.camera_id,
+                security_event_id=incident.id, severity=incident.severity, status="ACTIVE"))
+        return True
 
     @staticmethod
     def _receipt_identity(detection: DetectionEvent) -> tuple[str, str]:
@@ -433,6 +494,7 @@ class EventProcessor:
                 "confidence": detection.confidence,
                 "timestamp": detection.timestamp,
                 "zone": self._zone_from_metadata(detection),
+                "evidence_refs": self._evidence_refs(detection),
             }
             # Existing separately deployed engines may reject unknown JSON
             # fields.  Keep their contract stable until they opt into the
@@ -473,7 +535,9 @@ class EventProcessor:
         if decision is not None:
             event_metadata["security_decision"] = decision.model_dump(mode="json")
         zones = detection.metadata.get("zones")
-        zone = zones[0] if isinstance(zones, list) and zones and isinstance(zones[0], str) else None
+        zone = decision.metadata.get("zone_id") if decision is not None else None
+        if not isinstance(zone, str):
+            zone = zones[0] if isinstance(zones, list) and zones and isinstance(zones[0], str) else None
         return SecurityEvent(
             property_id=camera.property_id,
             camera_id=camera.id,
@@ -507,11 +571,24 @@ class EventProcessor:
         decision: SecurityDecision,
         track: TrackedPerson | None,
     ) -> str:
-        anonymous_track = track.track_id if track else detection.source_event_id
-        observed_at = detection.metadata.get("observed_at", detection.timestamp.isoformat())
-        return f"{anonymous_track}:{decision.event_type}:{observed_at}"
+        # Frigate's event id scopes one source activity across update frames.
+        # Zone events share a key so loitering can raise the same incident's
+        # severity; no physical-person identity is inferred.
+        zone_id = decision.metadata.get("zone_id") or EventProcessor._zone_from_metadata(detection)
+        policy_scope = f"zone:{zone_id}" if zone_id else f"type:{decision.event_type}"
+        return f"{detection.source}:{detection.source_event_id}:{policy_scope}"
 
     @staticmethod
     def _zone_from_metadata(detection: DetectionEvent) -> str | None:
         zones = detection.metadata.get("zones")
         return zones[0] if isinstance(zones, list) and zones and isinstance(zones[0], str) else None
+
+    @staticmethod
+    def _evidence_refs(detection: DetectionEvent) -> list[str]:
+        raw = detection.metadata.get("evidence_refs", [])
+        references = [value for value in raw if isinstance(value, str)] if isinstance(raw, list) else []
+        if detection.metadata.get("has_snapshot"):
+            references.append(f"frigate:{detection.source_event_id}:snapshot")
+        if detection.metadata.get("has_clip"):
+            references.append(f"frigate:{detection.source_event_id}:clip")
+        return list(dict.fromkeys(references))[:20]

@@ -36,6 +36,10 @@ def is_point_inside_polygon(point: Point, polygon: list[Point]) -> bool:
     inside = False
     px, py = point.x, point.y
 
+    for index in range(n):
+        if _on_segment(polygon[index], point, polygon[(index + 1) % n]):
+            return True
+
     j = n - 1
     for i in range(n):
         xi, yi = polygon[i].x, polygon[i].y
@@ -54,6 +58,37 @@ def is_point_inside_polygon(point: Point, polygon: list[Point]) -> bool:
     return inside
 
 
+def is_valid_polygon(polygon: list[Point]) -> bool:
+    """Reject duplicate, degenerate, and self-intersecting polygons."""
+    n = len(polygon)
+    if n < 3:
+        return False
+    if len({(point.x, point.y) for point in polygon}) < 3:
+        return False
+    if any(polygon[index] == polygon[(index + 1) % n] for index in range(n)):
+        return False
+    twice_area = sum(
+        polygon[index].x * polygon[(index + 1) % n].y
+        - polygon[(index + 1) % n].x * polygon[index].y
+        for index in range(n)
+    )
+    if abs(twice_area) < 1e-9:
+        return False
+
+    for first in range(n):
+        first_next = (first + 1) % n
+        for second in range(first + 1, n):
+            second_next = (second + 1) % n
+            if first == second or first_next == second or second_next == first:
+                continue
+            if do_line_segments_intersect(
+                polygon[first], polygon[first_next],
+                polygon[second], polygon[second_next],
+            ):
+                return False
+    return True
+
+
 def _orientation(p: Point, q: Point, r: Point) -> int:
     """Find orientation of ordered triplet (p, q, r).
     Returns:
@@ -69,6 +104,10 @@ def _orientation(p: Point, q: Point, r: Point) -> int:
 
 def _on_segment(p: Point, q: Point, r: Point) -> bool:
     """Given three collinear points p, q, r, checks if q lies on line segment 'pr'."""
+    cross = (q.y - p.y) * (r.x - p.x) - (q.x - p.x) * (r.y - p.y)
+    scale = max(1.0, abs(r.x - p.x), abs(r.y - p.y))
+    if abs(cross) > 1e-9 * scale:
+        return False
     if min(p.x, r.x) <= q.x <= max(p.x, r.x) and min(p.y, r.y) <= q.y <= max(p.y, r.y):
         return True
     return False

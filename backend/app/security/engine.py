@@ -39,12 +39,13 @@ NOTE — In-memory state
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.security.config import SecurityConfig
 from app.security.cooldown.manager import CooldownManager
 from app.security.models import (
     DetectionEvent,
+    EventState,
     SecurityContext,
     SecurityEventCandidate,
     SecurityRuleResult,
@@ -80,6 +81,8 @@ class SecurityEngine:
             overrides=self._config.severity_map
         )
         self._cooldown = CooldownManager()
+        self._ended_events: dict[tuple[str, str, str], datetime] = {}
+        self._last_seen: dict[tuple[str, str, str], datetime] = {}
 
         if rules is not None:
             self._rules = list(rules)
@@ -128,12 +131,11 @@ class SecurityEngine:
             A (possibly empty) list of ``SecurityEventCandidate`` objects
             for events that passed rule evaluation **and** cooldown.
         """
-        # 1. Validate
-        if not self._is_valid(detection):
-            return []
-
-        # 2. Build context
+        # 1. Build context so an end phase can always clear transient state,
+        # even when its final confidence or geometry is below rule thresholds.
         now = current_time or detection.timestamp
+        object_key = (detection.source, detection.camera_id, detection.object_id)
+        self._prune_ended_events(now)
         zones = self._config.zones_for_camera(detection.camera_id)
         context = SecurityContext(
             detection=detection,
@@ -142,6 +144,35 @@ class SecurityEngine:
             tripwires=self._config.tripwires_for_camera(detection.camera_id),
             current_time=now,
         )
+
+        if detection.event_state == EventState.END:
+            previous = self._last_seen.get(object_key)
+            if previous is not None and now < previous:
+                return []
+            for rule in self._rules:
+                try:
+                    rule.end_event(context)
+                except Exception:
+                    logger.exception("Rule '%s' failed to clear ended event state", rule.name)
+            self._cooldown.remove_object(detection.camera_id, detection.object_id)
+            self._last_seen.pop(object_key, None)
+            self._ended_events[object_key] = now
+            if len(self._ended_events) > 10_000:
+                oldest = min(self._ended_events, key=self._ended_events.get)
+                self._ended_events.pop(oldest, None)
+            return []
+
+        if object_key in self._ended_events:
+            return []
+
+        previous = self._last_seen.get(object_key)
+        if previous is not None and now < previous:
+            return []
+
+        # 2. Validate active observations.
+        if not self._is_valid(detection):
+            return []
+        self._last_seen[object_key] = now
 
         # 3. Run rules (catch per-rule errors)
         triggered: list[SecurityRuleResult] = []
@@ -188,6 +219,10 @@ class SecurityEngine:
                     tripwire_id=result.tripwire_id,
                     reason=result.reason,
                     policy_version=self._config.policy_version,
+                    evidence_refs=[
+                        value for value in detection.metadata.get("evidence_refs", [])
+                        if isinstance(value, str)
+                    ] if isinstance(detection.metadata.get("evidence_refs", []), list) else [],
                     metadata=result.metadata,
                 )
             )
@@ -199,6 +234,14 @@ class SecurityEngine:
         for rule in self._rules:
             rule.reset()
         self._cooldown.reset()
+        self._ended_events.clear()
+        self._last_seen.clear()
+
+    def _prune_ended_events(self, now: datetime) -> None:
+        cutoff = now - timedelta(hours=24)
+        expired = [key for key, ended_at in self._ended_events.items() if ended_at < cutoff]
+        for key in expired:
+            del self._ended_events[key]
 
     # ------------------------------------------------------------------
     # Private helpers

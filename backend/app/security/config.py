@@ -15,23 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.security.models import Severity, Tripwire, Zone
-
-from app.security.models import Zone, Point
-
-zones: list[Zone] = field(default_factory=lambda: [
-    Zone(
-        id="test-zone",
-        name="Test Zone",
-        camera_id="laptop_camera",
-        polygon=[
-            Point(x=800, y=350),
-            Point(x=1200, y=350),
-            Point(x=1200, y=700),
-            Point(x=800, y=700),
-        ],
-    )
-])
+from app.security.models import Tripwire, Zone
 
 @dataclass(frozen=True)
 class SecurityConfig:

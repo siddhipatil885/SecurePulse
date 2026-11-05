@@ -154,10 +154,18 @@ async def test_concurrent_update_replays_return_the_exact_incident(database):
     value = detection(camera, "update")
     value.metadata["observed_at"] = "2026-10-20T00:00:01+00:00"
     updates = await asyncio.gather(*(ingest(database, value) for _ in range(4)))
-    assert len({result.event.id for result in updates}) == 1
-    assert updates[0].event.id != original.event.id
+    # A Frigate update belongs to the same source activity as its initial
+    # event. Concurrent replays must resolve to that existing incident.
+    assert {result.event.id for result in updates} == {original.event.id}
     replay = await ingest(database, value)
-    assert replay.event.id == updates[0].event.id
+    assert replay.duplicate
+    assert replay.event.id == original.event.id
+    async with database() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SecurityEvent).where(
+                SecurityEvent.frigate_event_id == camera.frigate_camera_name
+            )
+        ) == 1
 
 
 def test_populated_forward_and_reverse_migration(postgres_schema):

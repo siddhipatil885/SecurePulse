@@ -29,9 +29,14 @@ Assumptions:
 """
 
 from datetime import datetime, timezone
+import math
 from typing import Any, Dict, Optional
 
 from app.security.models import BoundingBox, DetectionEvent, EventState
+
+
+class FrigateDetectionError(ValueError):
+    """Raised for malformed source events that cannot be safely normalized."""
 
 
 class FrigateDetectionAdapter:
@@ -53,24 +58,29 @@ class FrigateDetectionAdapter:
         Returns:
             A normalized DetectionEvent ready for the SecurityEngine.
         """
+        if not isinstance(payload, dict):
+            raise FrigateDetectionError("Frigate event must be an object")
+
         # Handle MQTT event structure: payload may have "after" key
         if "after" in payload and isinstance(payload["after"], dict):
-            # Extract lifecycle from MQTT type if available
             mqtt_type = payload.get("type", "update")
             data_source = payload["after"]
         else:
             mqtt_type = "update"
             data_source = payload
+        if mqtt_type not in {"new", "update", "end"}:
+            raise FrigateDetectionError("Unsupported Frigate event phase")
+        for required in ("id", "camera", "label"):
+            if not isinstance(data_source.get(required), str) or not data_source[required].strip():
+                raise FrigateDetectionError(f"Frigate event is missing a valid {required}")
 
         source_event_id = data_source["id"]
-        
-        # Assumption 1: Frigate ID serves as a unique object tracking ID
         object_id = source_event_id
 
         # Lifecycle state
         # end_time is null when the event is ongoing
         end_time = data_source.get("end_time")
-        if end_time is not None:
+        if mqtt_type == "end" or end_time is not None:
             event_state = EventState.END
         elif mqtt_type == "new":
             event_state = EventState.START
@@ -78,19 +88,28 @@ class FrigateDetectionAdapter:
             event_state = EventState.UPDATE
 
         # Use frame_time for the most accurate current detection time, fallback to start_time
-        time_val = data_source.get("frame_time", data_source.get("start_time"))
-        timestamp = datetime.fromtimestamp(time_val, tz=timezone.utc)
+        time_val = data_source.get("frame_time", data_source.get("start_time", end_time))
+        if isinstance(time_val, bool) or not isinstance(time_val, (int, float)) or not math.isfinite(time_val):
+            raise FrigateDetectionError("Frigate event has no valid timestamp")
+        try:
+            timestamp = datetime.fromtimestamp(time_val, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError) as error:
+            raise FrigateDetectionError("Frigate event timestamp is out of range") from error
 
         # Coordinate processing
         bbox = None
         raw_box = data_source.get("box")
-        if raw_box and len(raw_box) == 4:
+        if isinstance(raw_box, (list, tuple)) and len(raw_box) == 4:
             # Format is [x1, y1, x2, y2]
-            val_x1, val_y1, val_x2, val_y2 = raw_box
-            
-            if val_x2 >= val_x1 and val_y2 >= val_y1:
-                # If values are > 1, assume they are absolute pixels already
-                if val_x2 > 1.0 or val_y2 > 1.0:
+            try:
+                val_x1, val_y1, val_x2, val_y2 = (float(value) for value in raw_box)
+            except (TypeError, ValueError):
+                val_x1 = val_y1 = val_x2 = val_y2 = math.nan
+
+            coordinates = (val_x1, val_y1, val_x2, val_y2)
+            if all(math.isfinite(value) and value >= 0 for value in coordinates) and val_x2 >= val_x1 and val_y2 >= val_y1:
+                normalized = all(value <= 1.0 for value in coordinates)
+                if not normalized:
                     x1 = float(val_x1)
                     y1 = float(val_y1)
                     x2 = float(val_x2)
@@ -104,13 +123,19 @@ class FrigateDetectionAdapter:
                     y2 = val_y2 * frame_height
                     bbox = BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2)
 
+        confidence = data_source.get("score", 0.0)
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
+            raise FrigateDetectionError("Frigate event has invalid score")
+        if confidence < 0.0 or confidence > 1.0:
+            raise FrigateDetectionError("Frigate event score must be between 0 and 1")
+
         return DetectionEvent(
             source="frigate",
             source_event_id=source_event_id,
             camera_id=data_source["camera"],
             object_id=object_id,
             object_type=data_source["label"],
-            confidence=data_source.get("score", 0.0),
+            confidence=confidence,
             timestamp=timestamp,
             bbox=bbox,
             frame_width=frame_width,

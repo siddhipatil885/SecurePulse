@@ -6,15 +6,22 @@
   emits an incident decision when another configured rule triggers.
 - Security rule configuration defaults to policy version `1`; bump
   `SecurityConfig.policy_version` when rule or severity policy changes.
-- Dispatch is manual. An owner or dispatcher checks
-  `GET /api/v1/dispatch/eligible-marshals`, then creates an offer with
-  `POST /api/v1/dispatch/offers` and a unique idempotency key.
+- Zone polygons use source-frame pixels. Configure their reference frame size
+  to scale them when a camera resolution changes. Empty restricted hours mean
+  all day; configured windows use the zone's IANA timezone, include the start,
+  and exclude the end. Zone confidence defaults to `0.5` and dwell to zero.
+- Dispatch can be manual through `GET /api/v1/dispatch/eligible-marshals` and
+  `POST /api/v1/dispatch/offers`, or automatic through
+  `POST /api/v1/dispatch/incidents/{incident_id}/dispatch`. The automatic path
+  chooses the least-loaded eligible marshal, then the lowest profile ID.
 - Marshal availability is a manual `on_duty` / `available` update. It is
   considered fresh for five minutes. Marshal capacity counts both offers and
   accepted/in-progress work.
-- Offers default to 60 seconds and accept 10–3600 seconds. Expired offers are
-  marked `EXPIRED` and create a dispatcher escalation intent. No automatic
-  reassignment is performed.
+- Offers default to 60 seconds and accept 10–3600 seconds. After a decline or
+  expiry, the next eligible marshal is offered the incident. Selection sorts
+  by active workload, then profile ID, and skips marshals who already declined
+  or timed out on that incident. After three offers or when none are eligible,
+  the incident moves to `ESCALATED` and a dispatcher intent is queued.
 - Marshal actions require the targeted marshal account and current assignment
   version: accept/decline, then progress through `EN_ROUTE`, `ON_SCENE`, and
   `COMPLETED`. Completion resolves the incident and writes assignment and
@@ -27,6 +34,17 @@
   Production configuration rejects that fake provider. It records attempts and never contacts marshals or public
   emergency services. `SENT` with provider `recording-fake` means only that the
   fake sink recorded the intent, not that a person was contacted or read it.
+
+## Reproduce the pilot drill
+
+From `backend/`, run:
+
+```sh
+pytest -q tests/test_dispatch.py::test_detection_to_resolution_drill_with_fake_notification_provider
+```
+
+The test uses a simulated restricted-zone person event and the local fake
+provider. The broader failure and policy suite is `pytest -q`.
 
 ## Failure diagnosis
 
@@ -48,8 +66,8 @@
 
 ## Product decisions still required
 
-The five-minute availability freshness, default one-minute offer, manual
-reassignment, dispatcher authority, and final escalation handling are safe
+The five-minute availability freshness, default one-minute offer, three-offer
+automatic reassignment policy, dispatcher authority, and final escalation handling are safe
 development defaults, not approved production policy. Confirm these with the
 product owner before using dispatch operationally. No external delivery
 provider or emergency-service integration is configured.

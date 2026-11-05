@@ -28,12 +28,17 @@ class LocalSecurityEngine:
                 context.bounding_box, context.frame_width, context.frame_height
             ),
             event_state=EventState.UPDATE,
-            metadata={"active_person_count": context.active_person_count},
+            metadata={
+                "active_person_count": context.active_person_count,
+                "evidence_refs": context.evidence_refs,
+            },
         )
         candidates = self.engine.evaluate(detection, current_time=context.timestamp)
         if not candidates:
             return SecurityDecision(
-                event_type="DETECTION", score=0, severity="INFO", reason=None
+                event_type="DETECTION", score=0, severity="INFO", reason=None,
+                metadata={"policy_version": self.engine.config.policy_version,
+                          "evidence_refs": context.evidence_refs},
             )
         # A generic person sighting is useful telemetry, but it is not an
         # actionable security incident. Preserve that distinction at the
@@ -46,7 +51,8 @@ class LocalSecurityEngine:
             return SecurityDecision(
                 event_type="DETECTION", score=0, severity="INFO",
                 reason="Informational person detection; no security policy triggered",
-                metadata={"policy_version": self.engine.config.policy_version},
+                metadata={"policy_version": self.engine.config.policy_version,
+                          "evidence_refs": context.evidence_refs},
             )
         # A single HTTP-style decision must represent the most urgent rule
         # result.  The person-detected rule runs first, so returning index 0
@@ -66,6 +72,7 @@ class LocalSecurityEngine:
                 "zone_id": candidate.zone_id,
                 "tripwire_id": candidate.tripwire_id,
                 "policy_version": candidate.policy_version,
+                "evidence_refs": candidate.evidence_refs,
             },
         )
 

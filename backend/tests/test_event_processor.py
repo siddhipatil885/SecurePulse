@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from sqlalchemy.exc import IntegrityError
-from app.models.operations import IncidentStatusHistory
+from app.models.operations import AuditRecord, IncidentStatusHistory, NotificationOutbox
 
 import pytest
 
@@ -22,6 +22,7 @@ from app.services.event_processor import (
     EventProcessingError,
     SecurityEngineUnavailableError,
 )
+
 
 
 def make_detection(**overrides: object) -> DetectionEvent:
@@ -54,6 +55,7 @@ def make_processor(
     event_repository.get_by_frigate_event_id.return_value = existing
     event_repository.get_receipt.return_value = None
     event_repository.get_recent_by_camera_object.return_value = None
+    event_repository.get_by_incident_key.return_value = None
     def persist(event: SecurityEvent) -> SecurityEvent:
         event.id = event.id or 1
         return event
@@ -260,6 +262,50 @@ async def test_processor_applies_security_decision() -> None:
     assert result.event.severity == "HIGH"
     assert result.event.status == "OPEN"
     security_engine.evaluate.assert_awaited_once()
+
+
+def test_incident_key_is_stable_for_updates_in_same_zone() -> None:
+    from app.domain.security import SecurityDecision
+
+    first = make_detection(metadata={"observed_at": "2026-09-19T19:30:20Z"})
+    later = make_detection(timestamp=datetime(2026, 9, 19, 19, 31, tzinfo=timezone.utc),
+        metadata={"observed_at": "2026-09-19T19:31:00Z"})
+    zone_entry = SecurityDecision(event_type="ZONE_ENTRY", score=55, severity="MEDIUM",
+        reason="entered", metadata={"zone_id": "loading"})
+    loitering = SecurityDecision(event_type="LOITERING", score=75, severity="HIGH",
+        reason="loitering", metadata={"zone_id": "loading"})
+
+    assert EventProcessor._incident_key(first, zone_entry, None) == \
+        EventProcessor._incident_key(later, loitering, None)
+
+
+@pytest.mark.asyncio
+async def test_update_escalates_same_zone_incident_without_creating_duplicate() -> None:
+    engine = AsyncMock()
+    engine.evaluate.side_effect = [
+        SecurityDecision(event_type="ZONE_ENTRY", score=55, severity="MEDIUM",
+            reason="Entered restricted zone", metadata={"zone_id": "loading", "policy_version": "v1"}),
+        SecurityDecision(event_type="LOITERING", score=75, severity="HIGH",
+            reason="Stayed in restricted zone", metadata={"zone_id": "loading", "policy_version": "v1"}),
+    ]
+    processor, session, _, repository = make_processor(security_engine=engine)
+
+    opened = await processor.process(make_detection(metadata={"lifecycle": "new"}))
+    persisted = opened.event
+    repository.get_by_frigate_event_id.return_value = persisted
+    repository.get_by_incident_key.return_value = persisted
+
+    escalated = await processor.process(make_detection(metadata={
+        "lifecycle": "update", "revision": 1,
+    }))
+
+    assert opened.event.incident_key == escalated.event.incident_key
+    assert escalated.event.severity == "HIGH"
+    assert escalated.event.event_type == "LOITERING"
+    assert escalated.duplicate is False
+    assert repository.create.await_count == 1
+    assert any(isinstance(call.args[0], AuditRecord) for call in session.add.call_args_list)
+    assert any(isinstance(call.args[0], NotificationOutbox) for call in session.add.call_args_list)
 
 
 @pytest.mark.asyncio

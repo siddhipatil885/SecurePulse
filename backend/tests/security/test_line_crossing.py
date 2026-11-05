@@ -1,6 +1,6 @@
 """Tests for virtual tripwire line-crossing detection."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.security.config import SecurityConfig
 from app.security.engine import SecurityEngine
@@ -88,3 +88,19 @@ class TestLineCrossingEngine:
         ]
         assert len(crossing) == 1
         assert crossing[0].tripwire_id == "front-door"
+
+    def test_out_of_order_frame_does_not_rewind_tripwire_position(self) -> None:
+        config = SecurityConfig(
+            tripwires=[make_tripwire()],
+            line_crossing_cooldown_seconds=0.0,
+        )
+        engine = SecurityEngine(config=config)
+        engine.evaluate(make_detection(bbox=make_bbox(500), timestamp=T0), current_time=T0)
+        engine.evaluate(make_detection(bbox=make_bbox(700), timestamp=T0 + timedelta(seconds=10)),
+                        current_time=T0 + timedelta(seconds=10))
+        late = engine.evaluate(make_detection(bbox=make_bbox(500), timestamp=T0 + timedelta(seconds=5)),
+                               current_time=T0 + timedelta(seconds=5))
+        current = engine.evaluate(make_detection(bbox=make_bbox(720), timestamp=T0 + timedelta(seconds=11)),
+                                  current_time=T0 + timedelta(seconds=11))
+        assert not any(candidate.event_type == EventType.LINE_CROSSING for candidate in late)
+        assert not any(candidate.event_type == EventType.LINE_CROSSING for candidate in current)
