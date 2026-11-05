@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.repositories.dispatch import DispatchRepository, OutboxRepository
+from app.services.dispatch_service import DispatchService
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +52,9 @@ class TimeoutEscalator:
         async with self.session_factory() as session, session.begin():
             repository = DispatchRepository(session)
             offers = await repository.due_offers(now, limit)
+            service = DispatchService(session)
             for offer in offers:
-                await repository.transition(offer, status="EXPIRED", now=now,
-                    actor_subject="system:timeout", correlation_id=f"timeout:{offer.id}:{offer.version}",
-                    reason="deadline elapsed")
-                from app.models import NotificationOutbox
-                session.add(NotificationOutbox(property_id=offer.property_id,
-                    security_event_id=offer.security_event_id, kind="DISPATCH_ESCALATION_REQUIRED",
-                    destination=f"property:{offer.property_id}:dispatchers",
-                    payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
-                             "reason": "offer_expired"},
-                    dedupe_key=f"assignment:{offer.id}:escalation:{offer.version}", status="PENDING"))
+                await service.expire(offer_id=offer.id, actor_subject="system:timeout")
             return len(offers)
 
 

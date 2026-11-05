@@ -53,11 +53,12 @@ class DispatchRepository:
         await self.session.flush()
         return offer
 
-    async def eligible_marshals(self, property_id: int, fresh_since: datetime) -> list[MarshalProfile]:
+    async def eligible_marshals(self, property_id: int, fresh_since: datetime,
+                                excluded_profile_ids: set[int] | None = None) -> list[MarshalProfile]:
         active = select(func.count(Assignment.id)).where(
             Assignment.marshal_profile_id == MarshalProfile.id,
             Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).scalar_subquery()
-        statement = (select(MarshalProfile).join(User, User.id == MarshalProfile.user_id)
+        statement = (select(MarshalProfile, active.label("active_load")).join(User, User.id == MarshalProfile.user_id)
             .join(PropertyMembership, (PropertyMembership.user_id == MarshalProfile.user_id) &
                   (PropertyMembership.property_id == MarshalProfile.property_id))
             .join(MarshalAvailability, MarshalAvailability.marshal_profile_id == MarshalProfile.id)
@@ -65,8 +66,22 @@ class DispatchRepository:
                 User.active.is_(True), PropertyMembership.active.is_(True),
                 PropertyMembership.role == "marshal", MarshalAvailability.on_duty.is_(True),
                 MarshalAvailability.available.is_(True), MarshalAvailability.updated_at >= fresh_since,
-                active < MarshalProfile.capacity).order_by(MarshalProfile.id))
-        return list((await self.session.scalars(statement)).all())
+                active < MarshalProfile.capacity).order_by(active, MarshalProfile.id))
+        if excluded_profile_ids:
+            statement = statement.where(MarshalProfile.id.not_in(excluded_profile_ids))
+        rows = (await self.session.execute(statement)).all()
+        return [profile for profile, _load in rows]
+
+    async def prior_attempt_profile_ids(self, incident_id: int) -> set[int]:
+        statement = select(Assignment.marshal_profile_id).where(
+            Assignment.security_event_id == incident_id,
+            Assignment.status.in_(["DECLINED", "EXPIRED"]))
+        return set((await self.session.scalars(statement)).all())
+
+    async def assignment_attempt_count(self, incident_id: int) -> int:
+        count = await self.session.scalar(select(func.count(Assignment.id)).where(
+            Assignment.security_event_id == incident_id))
+        return int(count or 0)
 
     async def due_offers(self, now: datetime, limit: int = 50) -> list[Assignment]:
         return list((await self.session.scalars(select(Assignment).where(
@@ -90,6 +105,36 @@ class DispatchRepository:
             resource_id=str(incident.id), correlation_id=correlation_id,
             details={"previous_status": previous, "new_status": "RESOLVED",
                      "reason": "Marshal completed response"}))
+
+    async def set_incident_status(self, incident: SecurityEvent, *, status: str,
+                                  actor_subject: str, reason: str,
+                                  correlation_id: str) -> None:
+        previous = incident.status
+        if previous == status:
+            return
+        incident.status = status
+        self.session.add(IncidentStatusHistory(security_event_id=incident.id,
+            previous_status=previous, new_status=status, actor_subject=actor_subject,
+            reason=reason, correlation_id=correlation_id))
+        self.session.add(AuditRecord(property_id=incident.property_id, actor_subject=actor_subject,
+            action="INCIDENT_STATUS_CHANGED", resource_type="security_event",
+            resource_id=str(incident.id), correlation_id=correlation_id,
+            details={"previous_status": previous, "new_status": status, "reason": reason}))
+
+    async def add_no_marshal_escalation(self, incident: SecurityEvent, *, actor_subject: str,
+                                        reason: str, correlation_id: str) -> None:
+        await self.set_incident_status(incident, status="ESCALATED", actor_subject=actor_subject,
+            reason=reason, correlation_id=correlation_id)
+        attempts = await self.assignment_attempt_count(incident.id)
+        dedupe_key = f"dispatch:{incident.id}:attempts:{attempts}:no-eligible-marshal"
+        existing = await self.session.scalar(select(NotificationOutbox.id).where(
+            NotificationOutbox.dedupe_key == dedupe_key))
+        if existing is None:
+            self.session.add(NotificationOutbox(property_id=incident.property_id,
+                security_event_id=incident.id, kind="DISPATCH_NO_ELIGIBLE_MARSHAL",
+                destination=f"property:{incident.property_id}:dispatchers",
+                payload={"incident_id": incident.id, "reason": reason},
+                dedupe_key=dedupe_key, status="PENDING"))
 
 
 class OutboxRepository:

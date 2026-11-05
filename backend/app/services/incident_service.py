@@ -9,9 +9,9 @@ from app.repositories.incidents import IncidentRepository
 
 class IncidentService:
     _commands = {
-        "acknowledge": ({"OPEN"}, "ACKNOWLEDGED"),
-        "resolve": ({"OPEN", "ACKNOWLEDGED"}, "RESOLVED"),
-        "dismiss": ({"OPEN", "ACKNOWLEDGED", "UNCLASSIFIED"}, "DISMISSED"),
+        "acknowledge": ({"OPEN", "ESCALATED"}, "ACKNOWLEDGED"),
+        "resolve": ({"OPEN", "ACKNOWLEDGED", "DISPATCHING", "ESCALATED"}, "RESOLVED"),
+        "dismiss": ({"OPEN", "ACKNOWLEDGED", "DISPATCHING", "ESCALATED", "UNCLASSIFIED"}, "DISMISSED"),
         "reopen": ({"RESOLVED", "DISMISSED", "CLOSED"}, "OPEN"),
     }
 

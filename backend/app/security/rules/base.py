@@ -44,3 +44,6 @@ class SecurityRule(ABC):
         The default implementation is a no-op.  Stateful rules (zone
         entry, loitering) should override this.
         """
+
+    def end_event(self, context: SecurityContext) -> None:
+        """Drop transient state associated with a completed source event."""

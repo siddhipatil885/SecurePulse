@@ -4,8 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ApplicationError
-from app.models import (Assignment, MarshalAvailability, MarshalProfile,
-    NotificationOutbox, PropertyMembership, SecurityEvent, User)
+from app.models import Assignment, MarshalAvailability, MarshalProfile, PropertyMembership, SecurityEvent, User
 from app.repositories.dispatch import DispatchRepository
 
 
@@ -41,8 +40,8 @@ class DispatchService:
             SecurityEvent.property_id == property_id).with_for_update())
         if incident is None:
             raise ApplicationError("NOT_FOUND", "Incident not found for this property.", 404)
-        if incident.status not in {"OPEN", "ACKNOWLEDGED"}:
-            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Only open incidents can be dispatched.", 409)
+        if incident.status not in {"OPEN", "ACKNOWLEDGED", "DISPATCHING", "ESCALATED"}:
+            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Incident is not in a dispatchable state.", 409)
         existing = await self.repository.find_by_idempotency_key(idempotency_key)
         if existing:
             if not self._same_request(existing, property_id=property_id, incident_id=incident_id,
@@ -79,8 +78,12 @@ class DispatchService:
             marshal_profile_id=marshal_profile_id, status="OFFERED",
             expires_at=now + timedelta(seconds=expires_in_seconds), idempotency_key=idempotency_key)
         try:
-            return await self.repository.add_offer(offer, actor_subject=actor_subject,
+            created = await self.repository.add_offer(offer, actor_subject=actor_subject,
                 correlation_id=idempotency_key)
+            await self.repository.set_incident_status(incident, status="DISPATCHING",
+                actor_subject=actor_subject, reason="Marshal offer created",
+                correlation_id=idempotency_key)
+            return created
         except IntegrityError:
             # The unique idempotency key and one-active-offer index are the
             # final concurrency guard when simultaneous requests pass the reads.
@@ -113,8 +116,14 @@ class DispatchService:
             raise ApplicationError("OFFER_CONFLICT", "The offer has already changed.", 409)
         if expires <= now:
             raise ApplicationError("OFFER_EXPIRED", "The assignment offer has expired.", 409)
-        return await self.repository.transition(offer, status="ACCEPTED" if accept else "DECLINED",
+        transitioned = await self.repository.transition(offer, status="ACCEPTED" if accept else "DECLINED",
             now=now, actor_subject=actor_subject, correlation_id=f"response:{offer.id}:{expected_version}")
+        if not accept:
+            await self.dispatch_next(incident_id=offer.security_event_id, property_id=offer.property_id,
+                expires_in_seconds=60,
+                actor_subject="system:reassignment",
+                correlation_id=f"declined:{offer.id}:{offer.version}")
+        return transitioned
 
     async def expire(self, *, offer_id: int, actor_subject: str) -> Assignment:
         offer = await self.repository.lock_offer(offer_id)
@@ -129,14 +138,53 @@ class DispatchService:
         result = await self.repository.transition(offer, status="EXPIRED", now=now,
             actor_subject=actor_subject, correlation_id=f"timeout:{offer.id}:{offer.version}",
             reason="deadline elapsed")
-        self.session.add(NotificationOutbox(property_id=offer.property_id,
-            security_event_id=offer.security_event_id, kind="DISPATCH_ESCALATION_REQUIRED",
-            destination=f"property:{offer.property_id}:dispatchers",
-            payload={"assignment_id": offer.id, "incident_id": offer.security_event_id,
-                     "reason": "offer_expired"},
-            dedupe_key=f"assignment:{offer.id}:escalation:{offer.version}", status="PENDING"))
-        await self.session.flush()
+        await self.dispatch_next(incident_id=offer.security_event_id, property_id=offer.property_id,
+            expires_in_seconds=60,
+            actor_subject="system:reassignment",
+            correlation_id=f"expired:{offer.id}:{offer.version}")
         return result
+
+    async def dispatch_next(self, *, incident_id: int, property_id: int,
+                            expires_in_seconds: int, actor_subject: str,
+                            correlation_id: str) -> Assignment | None:
+        """Offer to the least-loaded eligible marshal, or audit escalation.
+
+        Provisional policy: at most three marshal offers per incident; among
+        eligible marshals choose the fewest active offers/assignments, then ID.
+        Previously declined or expired marshals are skipped for this incident.
+        """
+        incident = await self.session.scalar(select(SecurityEvent).where(
+            SecurityEvent.id == incident_id, SecurityEvent.property_id == property_id
+        ).with_for_update())
+        if incident is None:
+            raise ApplicationError("NOT_FOUND", "Incident not found for this property.", 404)
+        if incident.status not in {"OPEN", "ACKNOWLEDGED", "DISPATCHING", "ESCALATED"}:
+            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Incident is not in a dispatchable state.", 409)
+        active = await self.session.scalar(select(Assignment).where(
+            Assignment.security_event_id == incident_id,
+            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])))
+        if active is not None:
+            return active
+
+        attempt_count = await self.repository.assignment_attempt_count(incident_id)
+        max_attempts = 3
+        excluded = await self.repository.prior_attempt_profile_ids(incident_id)
+        eligible = await self.repository.eligible_marshals(
+            property_id, datetime.now(timezone.utc) - timedelta(minutes=5), excluded
+        )
+        if not eligible or attempt_count >= max_attempts:
+            reason = "No eligible marshal is currently available"
+            if attempt_count >= max_attempts:
+                reason = "Maximum marshal offer attempts reached"
+            await self.repository.add_no_marshal_escalation(incident, actor_subject=actor_subject,
+                reason=reason, correlation_id=correlation_id)
+            return None
+
+        marshal = eligible[0]
+        key = f"dispatch:{incident_id}:attempt:{attempt_count + 1}:marshal:{marshal.id}"
+        return await self.create_offer(incident_id=incident_id, property_id=property_id,
+            marshal_profile_id=marshal.id, expires_in_seconds=expires_in_seconds,
+            idempotency_key=key, actor_subject=actor_subject)
 
     async def cancel(self, *, offer_id: int, actor_subject: str) -> Assignment:
         offer = await self.repository.lock_offer(offer_id)

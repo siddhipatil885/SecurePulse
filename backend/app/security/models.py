@@ -17,11 +17,14 @@ scale them using ``frame_width`` / ``frame_height`` before constructing a
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time, timezone
 from enum import Enum
+import math
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import field_validator, model_validator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +71,13 @@ class Point(BaseModel):
     x: float
     y: float
 
+    @field_validator("x", "y")
+    @classmethod
+    def require_finite_coordinates(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("coordinates must be finite numbers")
+        return value
+
 
 class BoundingBox(BaseModel):
     """Axis-aligned bounding box in pixel coordinates (origin top-left).
@@ -81,10 +91,17 @@ class BoundingBox(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    x1: float
-    y1: float
+    x1: float = Field(ge=0)
+    y1: float = Field(ge=0)
     x2: float = Field(ge=0)
     y2: float = Field(ge=0)
+
+    @field_validator("x1", "y1", "x2", "y2")
+    @classmethod
+    def require_finite_coordinates(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("coordinates must be finite numbers")
+        return value
 
     def center(self) -> Point:
         """Geometric center of the box."""
@@ -122,6 +139,66 @@ class Zone(BaseModel):
     camera_id: str = Field(min_length=1)
     polygon: list[Point] = Field(min_length=3)
     enabled: bool = True
+    severity: Severity = Severity.MEDIUM
+    minimum_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    minimum_dwell_seconds: float = Field(default=0.0, ge=0.0)
+    restricted_hours: list["OperatingWindow"] = Field(default_factory=list)
+    timezone: str = "UTC"
+    frame_width: int | None = Field(default=None, gt=0)
+    frame_height: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "Zone":
+        if (self.frame_width is None) != (self.frame_height is None):
+            raise ValueError("frame_width and frame_height must be configured together")
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError(f"Unknown zone timezone: {self.timezone}") from error
+        from app.security.zones.geometry import is_valid_polygon
+
+        if not is_valid_polygon(self.polygon):
+            raise ValueError("polygon must be a finite, non-degenerate, non-self-intersecting polygon")
+        return self
+
+    def is_restricted_at(self, instant: datetime) -> bool:
+        """Return whether configured restricted hours include this instant.
+
+        Empty hours mean the zone is restricted at all times. Window start is
+        inclusive and end is exclusive. Overnight windows are supported.
+        """
+        if not self.restricted_hours:
+            return True
+        local = instant.astimezone(ZoneInfo(self.timezone))
+        weekday, clock = local.weekday(), local.timetz().replace(tzinfo=None)
+        for window in self.restricted_hours:
+            if window.start < window.end:
+                if weekday in window.weekdays and window.start <= clock < window.end:
+                    return True
+            else:
+                previous_day = (weekday - 1) % 7
+                if ((weekday in window.weekdays and clock >= window.start)
+                        or (previous_day in window.weekdays and clock < window.end)):
+                    return True
+        return False
+
+
+class OperatingWindow(BaseModel):
+    """Local recurring hours during which a zone is restricted."""
+
+    weekdays: list[int] = Field(default_factory=lambda: list(range(7)), min_length=1)
+    start: time
+    end: time
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "OperatingWindow":
+        if any(day < 0 or day > 6 for day in self.weekdays):
+            raise ValueError("weekdays must use ISO values from 0 (Monday) to 6 (Sunday)")
+        if self.start == self.end:
+            raise ValueError("operating window start and end cannot be equal")
+        if self.start.tzinfo is not None or self.end.tzinfo is not None:
+            raise ValueError("operating window times must be local and timezone-naive")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +252,13 @@ class DetectionEvent(BaseModel):
     event_state: EventState = EventState.START
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("timestamp")
+    @classmethod
+    def require_aware_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must include a timezone")
+        return value.astimezone(timezone.utc)
+
 
 # ---------------------------------------------------------------------------
 # Rule output
@@ -225,6 +309,7 @@ class SecurityEventCandidate(BaseModel):
     tripwire_id: str | None = None
     reason: str
     policy_version: str = "1"
+    evidence_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

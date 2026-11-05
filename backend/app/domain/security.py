@@ -25,6 +25,7 @@ class SecurityContext(BaseModel):
     frame_width: int | None = Field(default=None, gt=0)
     frame_height: int | None = Field(default=None, gt=0)
     active_person_count: int | None = Field(default=None, ge=0)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
 
 
 class SecurityDecision(BaseModel):

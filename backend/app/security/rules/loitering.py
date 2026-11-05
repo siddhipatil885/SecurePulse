@@ -24,6 +24,7 @@ from typing import Dict, Tuple
 
 from app.security.config import SecurityConfig
 from app.security.models import (
+    EventState,
     EventType,
     SecurityContext,
     SecurityRuleResult,
@@ -58,6 +59,10 @@ class LoiteringRule(SecurityRule):
     def evaluate(self, context: SecurityContext) -> SecurityRuleResult | None:
         detection = context.detection
 
+        if detection.event_state == EventState.END:
+            self.end_event(context)
+            return None
+
         if detection.object_type != "person":
             return None
 
@@ -71,9 +76,11 @@ class LoiteringRule(SecurityRule):
         for zone in context.zones:
             key: _LoiterKey = (detection.camera_id, detection.object_id, zone.id)
             is_inside = is_point_inside_polygon(ground, zone.polygon)
+            state = self._state.get(key)
+            if state is not None and now < state.last_seen_at:
+                continue
 
             if is_inside:
-                state = self._state.get(key)
                 if state is None:
                     # First frame inside — start tracking
                     self._state[key] = _LoiterState(
@@ -127,6 +134,13 @@ class LoiteringRule(SecurityRule):
                     del self._state[key]
 
         return result
+
+    def end_event(self, context: SecurityContext) -> None:
+        camera_id = context.detection.camera_id
+        object_id = context.detection.object_id
+        keys = [key for key in self._state if key[:2] == (camera_id, object_id)]
+        for key in keys:
+            del self._state[key]
 
     def reset(self) -> None:
         self._state.clear()

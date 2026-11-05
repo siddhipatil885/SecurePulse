@@ -92,6 +92,12 @@ class CooldownManager:
         self._registry.clear()
 
     def remove_object(self, camera_id: str, object_id: str) -> None:
+        """Clear cooldowns for one completed source track."""
+        keys = [key for key in self._registry if key[0] == camera_id and key[2] == object_id]
+        for key in keys:
+            del self._registry[key]
+
+    def remove_object(self, camera_id: str, object_id: str) -> None:
         """Remove all cooldown entries for an object that left the frame."""
         keys_to_remove = [
             k for k in self._registry

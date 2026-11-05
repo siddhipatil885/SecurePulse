@@ -56,6 +56,12 @@ class EventRepository:
         )
         return await self.session.scalar(statement)
 
+    async def get_by_incident_key(self, incident_key: str, *, for_update: bool = False) -> SecurityEvent | None:
+        statement = select(SecurityEvent).where(SecurityEvent.incident_key == incident_key)
+        if for_update:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
     async def get_recent_by_camera_object(
         self,
         camera_id: int,

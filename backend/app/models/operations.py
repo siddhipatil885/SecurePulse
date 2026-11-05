@@ -133,6 +133,7 @@ class Assignment(Base):
             "security_event_id",
             unique=True,
             postgresql_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            sqlite_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
         ),
     )
 

@@ -12,10 +12,13 @@ State:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Tuple
 
 from app.security.config import SecurityConfig
 from app.security.models import (
+    EventState,
     EventType,
     Point,
     SecurityContext,
@@ -30,15 +33,25 @@ logger = logging.getLogger(__name__)
 _TrackKey = Tuple[str, str]  # (camera_id, object_id)
 
 
+@dataclass
+class _LineState:
+    point: Point
+    last_seen_at: datetime
+
+
 class LineCrossingRule(SecurityRule):
     """Detect when an object crosses a virtual tripwire."""
 
     def __init__(self, config: SecurityConfig) -> None:
         self._config = config
-        self._state: Dict[_TrackKey, Point] = {}
+        self._state: Dict[_TrackKey, _LineState] = {}
 
     def evaluate(self, context: SecurityContext) -> SecurityRuleResult | None:
         detection = context.detection
+
+        if detection.event_state == EventState.END:
+            self.end_event(context)
+            return None
 
         if detection.object_type != "person":
             return None
@@ -51,12 +64,15 @@ class LineCrossingRule(SecurityRule):
 
         key: _TrackKey = (detection.camera_id, detection.object_id)
         current_point = detection.bbox.bottom_center()
-        last_point = self._state.get(key)
+        now = context.current_time or detection.timestamp
+        state = self._state.get(key)
+        if state is not None and now < state.last_seen_at:
+            return None
         
         # Always update the state to the current point for the next frame
-        self._state[key] = current_point
+        self._state[key] = _LineState(point=current_point, last_seen_at=now)
 
-        if last_point is None:
+        if state is None:
             # First time we see the object, no trajectory yet
             return None
 
@@ -65,7 +81,7 @@ class LineCrossingRule(SecurityRule):
         for tripwire in context.tripwires:
             # Check if trajectory intersects tripwire
             intersect = do_line_segments_intersect(
-                last_point, current_point,
+                state.point, current_point,
                 tripwire.start_point, tripwire.end_point
             )
 
@@ -95,3 +111,6 @@ class LineCrossingRule(SecurityRule):
 
     def reset(self) -> None:
         self._state.clear()
+
+    def end_event(self, context: SecurityContext) -> None:
+        self._state.pop((context.detection.camera_id, context.detection.object_id), None)

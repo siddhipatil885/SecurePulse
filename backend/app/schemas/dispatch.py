@@ -46,3 +46,16 @@ class AvailabilityUpdate(BaseModel):
     property_id: int = Field(gt=0)
     on_duty: bool
     available: bool
+
+
+class DispatchRequest(BaseModel):
+    property_id: int = Field(gt=0)
+    expires_in_seconds: int = Field(default=60, ge=10, le=3600)
+    correlation_id: str = Field(min_length=8, max_length=255)
+
+
+class DispatchOutcome(BaseModel):
+    status: Literal["OFFERED", "ESCALATED"]
+    incident_id: int
+    assignment: OfferView | None = None
+    reason: str | None = None
