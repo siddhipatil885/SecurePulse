@@ -19,7 +19,9 @@ async def get_active_tracks(
     cameras: CameraService = Depends(get_camera_service),
 ) -> dict[str, list[dict[str, Any]]]:
     """Return active and grace-period tracks grouped by backend camera ID."""
-    snapshot = tracker.snapshot()
+    # Live overlays and occupancy counts represent present tracks only.
+    # Historical events and the track table retain lifecycle history separately.
+    snapshot = tracker.snapshot(include_lost=False)
     authorized = await cameras.list(property_ids=principal.property_ids)
     authorized_ids = {str(camera.id) for camera in authorized}
     return {camera_id: tracks for camera_id, tracks in snapshot.items() if camera_id in authorized_ids}

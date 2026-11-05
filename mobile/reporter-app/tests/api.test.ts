@@ -39,4 +39,40 @@ describe('API contract', () => {
     expect(normalizeError(new AxiosError('password=secret', 'ERR_NETWORK'))).toMatchObject({ code: 'NETWORK' });
     expect(normalizeError(new Error('secret')).message).not.toContain('secret');
   });
+  it('creates an idempotent reporter incident and uploads evidence with the bearer token', async () => {
+    const http = axios.create();
+    const request = vi.spyOn(http, 'request')
+      .mockResolvedValueOnce({ data: {
+        id: 8, property_id: 42, incident_type: 'THEFT', description: null, address: '1 Test Street',
+        latitude: null, longitude: null, location_accuracy: null, status: 'RECEIVED',
+        created_at: '2026-11-04T10:00:00Z', updated_at: '2026-11-04T10:00:00Z', evidence: [], timeline: [],
+      } })
+      .mockResolvedValueOnce({ data: {
+        id: 8, property_id: 42, incident_type: 'THEFT', description: null, address: '1 Test Street',
+        latitude: null, longitude: null, location_accuracy: null, status: 'RECEIVED',
+        created_at: '2026-11-04T10:00:00Z', updated_at: '2026-11-04T10:00:00Z',
+        evidence: [{ id: 2, media_type: 'image/jpeg', original_filename: 'photo.jpg', byte_size: 4, created_at: '2026-11-04T10:00:01Z' }],
+        timeline: [],
+      } });
+    const api = createApi('https://server.test', () => 'current', vi.fn(), http);
+    const incident = await api.createIncident({ property_id: 42, incident_type: 'THEFT', address: '1 Test Street' }, 'idempotency-key-123');
+    expect(incident.id).toBe(8);
+    await api.uploadIncidentEvidence(8, { uri: 'file:///photo.jpg', name: 'photo.jpg', type: 'image/jpeg' });
+    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      url: 'reporter/incidents', headers: expect.objectContaining({ Authorization: expect.any(String), 'X-Idempotency-Key': 'idempotency-key-123' }),
+    }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      url: 'reporter/incidents/8/evidence', headers: expect.objectContaining({ Authorization: expect.any(String) }),
+    }));
+  });
+  it('reads and updates all notification preference categories', async () => {
+    const http = axios.create();
+    const request = vi.spyOn(http, 'request')
+      .mockResolvedValueOnce({ data: [{ category: 'SECURITY_ALERTS', enabled: true, updated_at: '2026-11-04T10:00:00Z' }] })
+      .mockResolvedValueOnce({ data: { category: 'DISPATCH_UPDATES', enabled: false, updated_at: '2026-11-04T10:00:00Z' } });
+    const api = createApi('https://server.test', () => 'current', vi.fn(), http);
+    expect((await api.notificationPreferences()).at(0)?.enabled).toBe(true);
+    expect((await api.updateNotificationPreference('DISPATCH_UPDATES', false)).enabled).toBe(false);
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ method: 'PUT' }));
+  });
 });

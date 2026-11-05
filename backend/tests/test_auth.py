@@ -79,6 +79,14 @@ def test_production_auth_requires_secret() -> None:
         Settings(app_env="production", auth_enabled=True, jwt_secret="")
 
 
+def test_fake_notification_delivery_is_explicit_and_development_only() -> None:
+    assert Settings(_env_file=None).dispatch_notification_provider == "disabled"
+    assert Settings(_env_file=None, dispatch_notification_provider="recording-fake").dispatch_notification_provider == "recording-fake"
+    with pytest.raises(ValidationError, match="development-only"):
+        auth_settings(app_env="production", database_url="postgresql://test.invalid/test",
+                      dispatch_notification_provider="recording-fake")
+
+
 def test_production_requires_authentication_and_database() -> None:
     with pytest.raises(ValidationError):
         Settings(app_env="production", auth_enabled=False)

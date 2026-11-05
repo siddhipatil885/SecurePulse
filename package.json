@@ -1,0 +1,15 @@
+{
+  "name": "securepulse",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix backend/dashboard run build",
+    "dev": "npm --prefix backend/dashboard run dev",
+    "neon:sync": "node scripts/backend-python.mjs backend/scripts/sync_neon_env.py",
+    "neon:storage": "node scripts/backend-python.mjs backend/scripts/neon_storage.py",
+    "test:neon": "node scripts/backend-python.mjs backend/scripts/smoke_neon.py"
+  },
+  "dependencies": {
+    "@neon/config": "^1.11.3",
+    "@neon/env": "^1.6.14"
+  }
+}

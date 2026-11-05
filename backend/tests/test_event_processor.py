@@ -375,3 +375,29 @@ async def test_processor_publishes_anonymous_track_separately_from_incident() ->
     assert track_message["data"]["tracks"][0]["track_id"] == "person_track_frigate-123"  # type: ignore[index]
     assert event_message["type"] == "security_event"
     assert result.event.event_metadata["track_id"] == "person_track_frigate-123"
+
+
+@pytest.mark.asyncio
+async def test_processor_clears_live_projection_for_ended_track() -> None:
+    publisher = InMemoryEventPublisher()
+    queue = await publisher.subscribe()
+    tracker = PersonTracker()
+    processor, _, _, _ = make_processor(publisher=publisher)
+    processor.person_tracker = tracker
+    metadata = {
+        "bounding_box": [128, 72, 512, 648],
+        "frame_width": 1280,
+        "frame_height": 720,
+    }
+    tracker.observe(
+        make_detection(metadata={**metadata, "lifecycle": "new"}), "1"
+    )
+    tracker.observe(
+        make_detection(metadata={**metadata, "lifecycle": "end"}), "1"
+    )
+
+    await processor._publish_tracks("1", property_id=1)
+
+    message = await queue.get()
+    assert message["type"] == "person_tracks"
+    assert message["data"] == {"camera_id": "1", "tracks": []}  # type: ignore[index]

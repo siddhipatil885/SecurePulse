@@ -2,16 +2,18 @@ mqtt:
   enabled: true
   host: mqtt
   port: 1883
+  user: "{FRIGATE_MQTT_USER}"
+  password: "{FRIGATE_MQTT_PASSWORD}"
   topic_prefix: frigate
   client_id: frigate
 
 go2rtc:
   webrtc:
     candidates:
-      - ${FRIGATE_WEBRTC_CANDIDATE:-127.0.0.1:8555}
+      - "127.0.0.1:18556"
   streams:
-    front_door: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
-    laptop_camera: ${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
+    front_door: "{FRIGATE_RTSP_URL}"
+    laptop_camera: "rtsp://mediamtx:8554/webcam"
 
 detectors:
   cpu1:
@@ -25,7 +27,7 @@ detect:
   enabled: true
   width: 1280
   height: 720
-  fps: ${DETECT_FPS:-5}
+  fps: 5
 
 objects:
   track:
@@ -48,14 +50,14 @@ cameras:
             - record
     detect:
       enabled: true
-      width: 1280
-      height: 720
-      fps: ${DETECT_FPS:-5}
+      width: 640
+      height: 480
+      fps: 5
     objects:
       track:
         - person
     record:
-      enabled: true
+      enabled: false
       retain:
         days: 7
         mode: motion
@@ -72,4 +74,28 @@ cameras:
       retain:
         default: 14
 
-version: 0.13
+  laptop_camera:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/laptop_camera
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+    objects:
+      track:
+        - person
+    record:
+      enabled: false
+    snapshots:
+      enabled: true
+      clean_copy: true
+      timestamp: true
+      bounding_box: true
+      crop: false
+      retain:
+        default: 14

@@ -1,14 +1,15 @@
+name: securepulse
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: securepulse-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-securepulse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deployment/.env}
       POSTGRES_DB: ${POSTGRES_DB:-securepulse}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,86 +19,175 @@ services:
       retries: 10
 
   mqtt:
-    image: eclipse-mosquitto:2.0
-    container_name: securepulse-mqtt
+    image: eclipse-mosquitto:2.0.21
     restart: unless-stopped
+    environment:
+      MQTT_BACKEND_USER: securepulse
+      MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?Set MQTT_BACKEND_PASSWORD in deployment/.env}
+      MQTT_FRIGATE_PASSWORD: ${MQTT_FRIGATE_PASSWORD:?Set MQTT_FRIGATE_PASSWORD in deployment/.env}
     ports:
-      - "${MQTT_PORT:-1883}:1883"
+      - "127.0.0.1:${MQTT_PORT:-11883}:1883"
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/config/mosquitto.acl:/mosquitto/config/mosquitto.acl:ro
+      - ./mosquitto/config/passwordfile:/mosquitto/config/passwordfile:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -u \"$${MQTT_BACKEND_USER}\" -P \"$${MQTT_BACKEND_PASSWORD}\" -t '$$SYS/broker/uptime' -C 1 -W 3 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.12.3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RTSP_PORT:-18554}:8554"
+    volumes:
+      - ../mediamtx/mediamtx.yml:/mediamtx.yml:ro
+
+  # The minimal MediaMTX image has no shell/probe tools. This sidecar verifies
+  # video SDP for both streams; missing publishers make it unhealthy.
+  video-readiness:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    read_only: true
+    user: "65534:65534"
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ../scripts/probe_rtsp.py:/opt/probe_rtsp.py:ro
+    command: ["python", "-u", "/opt/probe_rtsp.py", "--host", "mediamtx", "--paths", "${RTSP_REQUIRED_PATHS:-live,webcam}", "--watch"]
+    depends_on:
+      - mediamtx
+    healthcheck:
+      test: ["CMD", "python", "/opt/probe_rtsp.py", "--check-state", "--max-age", "75"]
+      interval: 15s
+      timeout: 5s
+      retries: 2
+      start_period: 20s
+
+  sample-publisher:
+    profiles: ["test-pattern"]
+    image: jrottenberg/ffmpeg:7.1-ubuntu2404
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    command:
+      - -re
+      - -f
+      - lavfi
+      - -i
+      - testsrc2=size=1280x720:rate=10
+      - -an
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx:8554/live
 
   frigate:
     image: ghcr.io/blakeblackshear/frigate:0.13.2
-    container_name: securepulse-frigate
     restart: unless-stopped
     shm_size: "256mb"
     ports:
-      - "${FRIGATE_PORT:-5000}:5000"
-      - "${FRIGATE_WEBRTC_PORT:-8556}:8555/tcp" # WebRTC
-      - "${FRIGATE_WEBRTC_PORT:-8556}:8555/udp" # WebRTC
+      - "${FRIGATE_BIND_ADDRESS:-127.0.0.1}:${FRIGATE_PORT:-15000}:5000"
+      - "127.0.0.1:${GO2RTC_PORT:-11984}:1984"
+      - "${FRIGATE_WEBRTC_BIND_ADDRESS:-127.0.0.1}:${FRIGATE_WEBRTC_PORT:-18556}:8555/tcp"
+      - "${FRIGATE_WEBRTC_BIND_ADDRESS:-127.0.0.1}:${FRIGATE_WEBRTC_PORT:-18556}:8555/udp"
     volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - ../frigate/config/frigate.yml:/config/frigate.yml
+      - frigate_config:/config
+      - ../frigate/config/frigate.yml:/config/config.yml:ro
       - ../frigate/media:/media/frigate
       - type: tmpfs
         target: /tmp/cache
         tmpfs:
           size: 100000000
     environment:
-      - FRIGATE_RTSP_PASSWORD=${FRIGATE_RTSP_PASSWORD:-secret}
-      - RTSP_STREAM_URL=${RTSP_STREAM_URL:-rtsp://rtsp-sim:8554/live}
-      - FRIGATE_WEBRTC_CANDIDATE=${FRIGATE_WEBRTC_CANDIDATE:-127.0.0.1:8556}
-      - TZ=${TZ:-UTC}
+      FRIGATE_RTSP_URL: ${FRIGATE_RTSP_URL:-rtsp://mediamtx:8554/live}
+      FRIGATE_MQTT_USER: frigate
+      FRIGATE_MQTT_PASSWORD: ${MQTT_FRIGATE_PASSWORD:?Set MQTT_FRIGATE_PASSWORD in deployment/.env}
+      TZ: ${TZ:-UTC}
     depends_on:
-      - mqtt
+      mqtt:
+        condition: service_healthy
 
   backend:
     build:
       context: ..
-    container_name: securepulse-backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-securepulse}:${POSTGRES_PASSWORD:-securepulse}@postgres:5432/${POSTGRES_DB:-securepulse}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-securepulse}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deployment/.env}@postgres:5432/${POSTGRES_DB:-securepulse}}
+      DATABASE_URL_UNPOOLED: ${DATABASE_URL_UNPOOLED:-}
+      DATABASE_STORAGE_BUDGET_BYTES: ${DATABASE_STORAGE_BUDGET_BYTES:-1000000000}
+      NEON_AUTH_BASE_URL: ${NEON_AUTH_BASE_URL:-}
+      NEON_AUTH_JWKS_URL: ${NEON_AUTH_JWKS_URL:-}
+      EVIDENCE_STORAGE: ${EVIDENCE_STORAGE:-local}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-assets}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_ENDPOINT_URL_S3: ${AWS_ENDPOINT_URL_S3:-}
+      AWS_REGION: ${AWS_REGION:-}
       FRIGATE_URL: http://frigate:5000
       GO2RTC_URL: http://frigate:1984
       MQTT_HOST: mqtt
       MQTT_PORT: 1883
+      MQTT_USERNAME: securepulse
+      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD:?Set MQTT_BACKEND_PASSWORD in deployment/.env}
+      MQTT_EVENT_QUEUE_SIZE: ${MQTT_EVENT_QUEUE_SIZE:-256}
       FRIGATE_MQTT_TOPIC: frigate/events
       SECURITY_ENGINE_FAILURE_MODE: ${SECURITY_ENGINE_FAILURE_MODE:-STORE_UNCLASSIFIED}
-      # The optional external engine is not part of this compose stack. Fail
-      # quickly to the documented unclassified fallback when it is absent.
       SECURITY_ENGINE_TIMEOUT_SECONDS: ${SECURITY_ENGINE_TIMEOUT_SECONDS:-1}
       SECURITY_ENGINE_SUPPORTS_TRACKING: ${SECURITY_ENGINE_SUPPORTS_TRACKING:-false}
       USE_LOCAL_SECURITY_ENGINE: ${USE_LOCAL_SECURITY_ENGINE:-false}
       TRACKING_LOST_TRACK_TIMEOUT_SECONDS: ${TRACKING_LOST_TRACK_TIMEOUT_SECONDS:-3}
       TRACKING_MINIMUM_DETECTION_CONFIDENCE: ${TRACKING_MINIMUM_DETECTION_CONFIDENCE:-0.5}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      APP_ENV: ${APP_ENV:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      DASHBOARD_REGISTRATION_ENABLED: ${DASHBOARD_REGISTRATION_ENABLED:-true}
+      DISPATCH_NOTIFICATION_PROVIDER: ${DISPATCH_NOTIFICATION_PROVIDER:-disabled}
       JWT_SECRET: ${JWT_SECRET:-}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ISSUER: ${JWT_ISSUER:-}
+      REPORTER_EVIDENCE_MAX_BYTES: ${REPORTER_EVIDENCE_MAX_BYTES:-10000000}
+      REPORTER_EVIDENCE_MAX_FILES: ${REPORTER_EVIDENCE_MAX_FILES:-5}
+      REPORTER_EVIDENCE_MAX_INCIDENT_BYTES: ${REPORTER_EVIDENCE_MAX_INCIDENT_BYTES:-50000000}
+      REPORTER_EVIDENCE_MAX_PROPERTY_BYTES: ${REPORTER_EVIDENCE_MAX_PROPERTY_BYTES:-1000000000}
+      REPORTER_EVIDENCE_MIN_FREE_BYTES: ${REPORTER_EVIDENCE_MIN_FREE_BYTES:-1000000000}
+      EVIDENCE_ROOT: /media/evidence
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Camera media stays read-only; reporter attachments use separate storage.
+      - ../frigate/media:/media/evidence/camera:ro
+      - reporter_evidence:/media/evidence/reporter-incidents
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-18000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       mqtt:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=4)"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  # Simulated RTSP Stream for local offline development & testing
-  rtsp-sim:
-    image: bluenviron/mediamtx:latest
-    container_name: securepulse-rtsp-sim
-    restart: unless-stopped
-    ports:
-      - "8554:8554"
-
 volumes:
+  reporter_evidence:
   postgres_data:
+  frigate_config:
   mosquitto_data:
   mosquitto_log:

@@ -1,18 +1,20 @@
 .dashboard-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 75vh;
 }
 
 .dashboard-main {
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: block;
   padding: 16px;
   gap: 16px;
-  overflow: hidden;
+  overflow: visible;
 }
+
+.monitor-layout { display: grid; grid-template-columns: 1fr; gap: 24px; }
+.workspace-tabs { margin-bottom: 20px; }
+.dashboard-main > [role="status"] { margin-bottom: 16px; }
 
 .dashboard-center-section {
   flex: 1;
@@ -29,10 +31,10 @@
 
 @media (min-width: 1024px) {
   .dashboard-main {
-    flex-direction: row;
     padding: 24px;
     gap: 24px;
   }
+  .monitor-layout { grid-template-columns: minmax(0, 1fr) 340px; }
   
   .dashboard-center-section {
     flex: 1;
@@ -43,6 +45,7 @@
     width: 340px;
     flex-shrink: 0;
     overflow-y: auto;
+    max-height: 85vh;
     padding-right: 8px;
     gap: 24px;
   }

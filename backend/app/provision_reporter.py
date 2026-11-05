@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from sqlalchemy import select
 from app.core.reporter_auth import hash_password
+from app.core.config import get_settings
+from app.integrations.neon_auth import NeonAuth
 from app.database.database import get_session_factory
 from app.models import (Camera, MarshalAvailability, MarshalProfile, Property,
     PropertyMembership, User)
@@ -32,7 +34,11 @@ async def provision(args, password: str) -> None:
             camera = await session.get(Camera, camera_id)
             if camera.property_id != property_record.id:
                 raise ValueError(f"Camera {camera_id} already belongs to another property.")
-        user = User(subject=email, email=email, display_name=args.name, password_hash=hash_password(password))
+        if get_settings().neon_auth_base_url:
+            identity = await NeonAuth().signup(email, password, args.name)
+            user = User(subject="neon:" + identity["id"], email=email, display_name=args.name)
+        else:
+            user = User(subject=email, email=email, display_name=args.name, password_hash=hash_password(password))
         session.add(user)
         await session.flush()
         session.add(PropertyMembership(user_id=user.id, property_id=property_record.id, role=args.role))

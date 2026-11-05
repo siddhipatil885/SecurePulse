@@ -8,9 +8,10 @@ import { Notice, PropertyBanner, QueryState, ui } from '../components/Content';
 export function CamerasScreen() {
   const { propertyId } = useAuth();
   const cameras = useCameras();
-  return <Screen>
+  const refresh = () => { void cameras.refetch(); };
+  return <Screen refreshing={cameras.isRefetching} onRefresh={refresh}>
     <Text style={ui.title}>Your cameras</Text><PropertyBanner />
-    <PrimaryButton variant="secondary" label="Refresh cameras" disabled={!propertyId || cameras.isFetching} onPress={() => void cameras.refetch()} />
+    <PrimaryButton variant="secondary" label="Refresh cameras" disabled={!propertyId || cameras.isRefetching} onPress={refresh} />
     <QueryState query={cameras} empty={!cameras.data?.length} />
     {!cameras.isError && cameras.data?.map(camera => <View key={camera.id} style={ui.card}>
       <Text style={ui.heading}>{camera.name}</Text>

@@ -1,4 +1,4 @@
-# SecurePulse Reporter — Phase 2
+# SecurePulse Reporter
 
 Native Expo SDK 53 / React Native / TypeScript app in this directory. Install and run commands here, not at the repository root.
 
@@ -17,7 +17,7 @@ Never include JWT signing secrets, passwords, Frigate credentials, or access tok
 
 ## Backend setup (existing backend and database)
 
-The audit found JWT validation and surveillance read APIs, but no account issuance or property authorization. The authorized extension adds four tables to the same database: `reporter_users`, `properties`, `property_memberships`, and `property_cameras`. Detection tables and ingestion are unchanged.
+The mobile app uses the same backend, `users`, properties and active property memberships as the dashboard. Cameras belong to properties through `cameras.property_id`. Manual reports and their private evidence are separate from camera detections.
 
 From `backend/`, with its existing virtual environment activated:
 
@@ -26,9 +26,9 @@ python -m pip install -r requirements.txt
 python -m alembic upgrade head
 ```
 
-The migration is `0005_reporter_access`. No production migration or account provisioning was performed during implementation. Apply it to your configured PostgreSQL database before using the new APIs. Review/back up existing data according to your normal deployment process.
+Apply migrations through `0017_reporter_active_assignment` before using the integrated workflow. No production migration or account provisioning was performed during implementation. Review/back up existing data according to your normal deployment process.
 
-Configure the backend's existing `AUTH_ENABLED=true`, a strong `JWT_SECRET` of at least 32 characters, and optionally `JWT_ISSUER`. Reporter sign-in refuses to operate in anonymous development mode. Enabling authentication also requires the existing dashboard to send its normal read-scoped operator token; reporter credentials intentionally cannot access those global APIs.
+Configure `AUTH_ENABLED=true`, a strong `JWT_SECRET` of at least 32 characters, and optionally `JWT_ISSUER`. Sign-in refuses anonymous development mode. The dashboard uses its own HTTP-only cookie session; mobile bearer credentials cannot access legacy global operator APIs. Owners can register an account and property in the dashboard, then sign in to the mobile app with the same credentials. Additional reporter memberships can be provisioned below.
 
 Provision a real account using the local administrator command (replace values):
 
@@ -42,7 +42,7 @@ The password is requested interactively with confirmation (12–128 characters).
 python -m app.provision_reporter --email reporter@your-domain.example --name "Reporter" --role reporter --property-id 1
 ```
 
-Existing accounts are never overwritten, camera assignments to other properties are rejected, and the transaction rolls back on failure. A camera belongs to at most one property. Unassigned cameras are excluded from reporter reads. Owner and reporter membership both permit reviewing their property's data; no incident mutation or dispatch permission exists.
+Existing accounts are never overwritten, camera assignments to other properties are rejected, and the transaction rolls back on failure. A camera belongs to at most one property. Unassigned cameras are excluded from reporter reads. Owner and reporter membership both permit reviewing their property's data. Reporter-created incidents can expose verified assignment status after migration `0014_reporter_dispatch_link`; the app never assigns or impersonates marshals.
 
 ## API contract
 
@@ -59,7 +59,7 @@ All paths below are relative to `/api/v1`.
 | GET `/reporter/events/{id}` | Direct event access checked against the property |
 | GET `/reporter/summary` | Property-scoped camera/event counts and ACTIVE operator alert count |
 
-Every `/reporter/*` request requires `property_id` and an authenticated membership. Tokens carry `reporter:read`, not the legacy global `read` scope. The existing validator checks JWT signatures, expiration, and issuer; reporter dependencies also check enabled status and the server-side token version. No profile or ownership claim is trusted merely because it was decoded on the phone. Legacy global REST/media/track/WebSocket routes reject reporter tokens.
+Camera, event and summary requests require `property_id`. Manual incident requests check report ownership and current active owner/reporter membership; history covers the user's authorized properties. Profile responses accept all backend roles, while the reporter app only permits selecting owner/reporter properties. Tokens carry `reporter:read`, not the legacy global `read` scope. Dependencies check signatures, expiration, issuer, active account and token version. Legacy global REST/media/track/WebSocket routes reject reporter tokens.
 
 Passwords use salted scrypt hashes. Five failed attempts lock an account for 15 minutes; errors do not reveal whether an account exists. Deploy login behind your normal HTTPS edge and request-rate limits. Access tokens expire after one hour. No refresh endpoint existed, and none is assumed: expiration or a 401 ends the local session and requires sign-in. Logout clears local session/query data even offline; if revocation cannot reach the server, the UI says so and the remote token remains valid until expiration.
 
@@ -72,9 +72,15 @@ Passwords use salted scrypt hashes. Five failed attempts lock an account for 15 
 - Home uses actual property names and server counts. ACTIVE operator alerts are distinct from confirmed incidents. Camera `enabled` does not mean connected.
 - Connection health, property security status and confirmed incident counts remain unavailable because no authoritative backend source exists.
 - Alerts display recorded event type, camera, timestamp, severity and status. List pagination and details use real responses.
-- False Alarm and incident submission are explicitly unavailable. Opening Report Incident never sends a mutation.
-- Notification preferences are saved locally per user. No push registration or notification delivery is implemented.
-- No media streams, simulated events, mock production data, Frigate credentials, or marshal dispatch code are included.
+- Active alerts can be confirmed or dismissed once by an authorized property member.
+- Active backend alerts can now be confirmed or dismissed once per authorized property member; live camera playback remains unavailable in the mobile client.
+- Manual incident submission requires private writable evidence storage. Creation and upload retries retain their idempotency keys; a failed attachment does not create another report. History supports status and active-assignment filters. Active details poll every 10 seconds and support pull to refresh.
+- Phase 7 history and accessibility work is documented in [the Phase 7 report](docs/mobile/phase-7-history-accessibility.md).
+- Evidence uses short-lived audited grants plus the current bearer session. Images and MP4 video have on-demand native previews; failed/expired access can be refreshed. The backend accepts JPG, PNG and MP4 up to its configured limit (10 MB by default).
+- Phase 9 exposes all server-backed notification categories in Settings. See [the Phase 9 report](docs/mobile/phase-9-notification-preferences.md).
+- Phase 10 adds reporter name updates and secure password rotation. See [the Phase 10 report](docs/mobile/phase-10-account-self-service.md).
+- Notification preferences and Expo device registration are implemented behind migration `0015_reporter_notifications`; provider delivery and physical-device verification remain pending. See [the Phase 5 report](docs/mobile/phase-5-notifications.md).
+- No media streams, simulated events, mock production data, Frigate credentials, or marshal-facing client are included. Dispatch status is shown only when the existing server-side assignment state machine has a real assignment.
 
 ## Checks
 
@@ -92,6 +98,6 @@ python -m pip install -r requirements-test.txt
 python -m pytest -q
 ```
 
-The API tests use an isolated in-memory SQLite database with actual SQL queries and test-only accounts. Production remains PostgreSQL. The native navigation tests exercise the actual Expo Router layouts with screen/auth fixtures. They do not substitute for testing SecureStore, keyboard behavior, LAN access, and UI rendering on physical iOS/Android devices.
+`npm test` also starts a temporary FastAPI process on loopback port 18082 using `backend/.venv` (override with `DASHBOARD_TEST_PYTHON`). Install backend test requirements first. It exercises the real mobile HTTP client, report retry receipts, evidence grants, dashboard dispatch, marshal completion and password/logout revocation. Run `npm run test:unit` and `npm run test:navigation` independently without Python, or `npm run test:integration` for the backend path. Test databases and media are temporary; deployment services are never contacted. PostgreSQL locking tests and physical SecureStore, media playback, LAN and push checks still require their respective environments. See [the integration runbook](../../docs/runbooks/mobile-backend-integration.md).
 
 See [PHASE2_REPORT.md](PHASE2_REPORT.md) for completed validation and outstanding deployment tasks.

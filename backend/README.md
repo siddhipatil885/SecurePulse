@@ -86,6 +86,11 @@ alembic upgrade head
 
 ## Marshal dispatch persistence
 
+For the combined camera/manual operator queue, source-qualified IDs, protected
+evidence, and dispatcher offer/cancel APIs, see the
+[operator cases v1 contract](../docs/contracts/operator-cases-v1.md). Existing
+mobile and camera incident endpoints remain compatible.
+
 The tenancy migration introduced property-scoped marshal profiles, assignments,
 assignment events, a durable notification outbox, and delivery-attempt receipts.
 Migration `0011_dispatch_orchestration` completes their worker/idempotency fields

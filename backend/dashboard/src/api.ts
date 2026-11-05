@@ -1,4 +1,5 @@
 import type { Camera, PersonTrack, SecurityAlert, SecurityEvent } from './types';
+import type { CaseOverview } from './cases';
 
 interface ApiCamera {
   id: number;
@@ -8,10 +9,13 @@ interface ApiCamera {
   enabled: boolean;
   created_at: string | null;
   updated_at: string | null;
+  health_status?: string | null;
+  health_observed_at?: string | null;
 }
 
 interface ApiEvent {
   id: number;
+  property_id: number;
   camera_id: number;
   event_type: string;
   object_type: string;
@@ -46,6 +50,7 @@ export interface DashboardData {
   events: SecurityEvent[];
   alerts: SecurityAlert[];
   tracksByCamera: Record<string, PersonTrack[]>;
+  overview: { total_incidents: number; active_incidents: number; critical_incidents: number };
 }
 
 export function mapTrack(track: ApiTrack): PersonTrack {
@@ -66,12 +71,32 @@ export function mapTrack(track: ApiTrack): PersonTrack {
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '');
 
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
+export const dashboardBase = `${apiBaseUrl}/dashboard`;
+let sessionVersion = 0;
+export function resetSessionRequests() { sessionVersion += 1; }
+
+export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const version = sessionVersion;
+  const response = await fetch(`${dashboardBase}${path}`, {
+    ...options, credentials: 'include',
+    headers: { 'X-Dashboard-Request': '1', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
+  });
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    const data = await response.json().catch(() => ({}));
+    const message = data.error?.message ?? (Array.isArray(data.detail)
+      ? data.detail.map((item: { msg: string }) => item.msg).join('. ') : 'Unable to complete this request. Please try again.');
+    if (!options.signal?.aborted && version === sessionVersion && path.startsWith('/properties')) {
+      if (response.status === 401) window.dispatchEvent(new Event('dashboard-session-expired'));
+      if (response.status === 403) window.dispatchEvent(new Event('dashboard-access-changed'));
+    }
+    throw new ApiError(message, response.status);
   }
-  return response.json() as Promise<T>;
+  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
 function mapCamera(camera: ApiCamera): Camera {
@@ -81,12 +106,14 @@ function mapCamera(camera: ApiCamera): Camera {
     frigateCameraName: camera.frigate_camera_name,
     status: camera.enabled ? 'enabled' : 'disabled',
     lastSeen: camera.updated_at ?? camera.created_at ?? '',
+    healthStatus: camera.health_status ?? 'unknown',
   };
 }
 
 export function mapEvent(event: ApiEvent): SecurityEvent {
   return {
     id: String(event.id),
+    propertyId: event.property_id,
     cameraId: String(event.camera_id),
     type: event.event_type,
     objectType: event.object_type,
@@ -107,23 +134,28 @@ export function mapAlert(event: SecurityEvent): SecurityAlert {
     severity: severity === 'critical' ? 'critical' : severity === 'high' ? 'warning' : 'info',
     type: event.type,
     timestamp: event.timestamp,
-    status: status === 'resolved' ? 'resolved' : status === 'acknowledged' ? 'acknowledged' : 'active',
+    status: ['resolved', 'dismissed', 'closed'].includes(status ?? '') ? 'resolved' : status === 'acknowledged' ? 'acknowledged' : 'active',
   };
 }
 
-export async function fetchDashboardData(): Promise<DashboardData> {
-  const [apiCameras, eventPage, apiTracks] = await Promise.all([
-    get<ApiCamera[]>('/cameras?enabled=true'),
-    get<EventPage>('/events?page=1&page_size=100'),
-    get<Record<string, ApiTrack[]>>('/tracks'),
+export async function fetchDashboardData(propertyId: number, signal?: AbortSignal, unified = false): Promise<DashboardData> {
+  const base = `/properties/${propertyId}`;
+  const [apiCameras, eventPage, apiTracks, cameraOverview, caseOverview] = await Promise.all([
+    request<ApiCamera[]>(`${base}/cameras`, { signal }),
+    request<EventPage>(`${base}/incidents`, { signal }),
+    request<Record<string, ApiTrack[]>>(`${base}/tracks`, { signal }),
+    request<DashboardData['overview']>(`${base}/overview`, { signal }),
+    unified ? request<CaseOverview>(`${base}/cases/overview`, { signal }) : Promise.resolve(null),
   ]);
   const events = eventPage.items.map(mapEvent);
   const alerts = events
-    .filter((event) => event.status?.toLowerCase() !== 'resolved')
+    .filter((event) => ['OPEN', 'ACKNOWLEDGED'].includes(event.status ?? ''))
     .filter((event) => ['high', 'critical'].includes(event.severity?.toLowerCase() ?? ''))
     .map(mapAlert);
 
   return {
+    overview: caseOverview ? { total_incidents: caseOverview.total, active_incidents: caseOverview.active,
+      critical_incidents: cameraOverview.critical_incidents } : cameraOverview,
     cameras: apiCameras.map(mapCamera),
     events,
     alerts,
@@ -133,6 +165,21 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   };
 }
 
-export function frigateWebRtcUrl(cameraId: string): string {
-  return `${apiBaseUrl}/frigate/cameras/${encodeURIComponent(cameraId)}/webrtc`;
+export function frigateWebRtcUrl(propertyId: number, cameraId: string): string {
+  return `${dashboardBase}/properties/${propertyId}/cameras/${encodeURIComponent(cameraId)}/webrtc`;
+}
+
+export interface PropertyAccess { id: number; name: string; address: string | null; role: 'owner' | 'dispatcher' | 'reporter' }
+export interface Profile { id: number; name: string; email: string; properties: PropertyAccess[] }
+export interface IncidentHistory { id: number; previous_status: string | null; new_status: string; actor_subject: string; reason: string; occurred_at: string }
+export interface Evidence { id: number; type: string; timestamp: string }
+export interface IncidentRecord extends ApiEvent { zone: string | null }
+export type IncidentAction = 'acknowledge' | 'resolve' | 'dismiss' | 'reopen';
+
+export function allowedActions(status: string): IncidentAction[] {
+  if (status === 'OPEN') return ['acknowledge', 'resolve', 'dismiss'];
+  if (status === 'ACKNOWLEDGED') return ['resolve', 'dismiss'];
+  if (status === 'UNCLASSIFIED') return ['dismiss'];
+  if (['RESOLVED', 'DISMISSED', 'CLOSED'].includes(status)) return ['reopen'];
+  return [];
 }

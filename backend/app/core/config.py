@@ -29,6 +29,16 @@ class Settings(BaseSettings):
         validation_alias="CORS_ORIGINS",
     )
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
+    database_url_unpooled: str = Field(default="", validation_alias="DATABASE_URL_UNPOOLED")
+    database_storage_budget_bytes: int = Field(default=1_000_000_000, ge=1_000_000, validation_alias="DATABASE_STORAGE_BUDGET_BYTES")
+    neon_auth_base_url: str = Field(default="", validation_alias="NEON_AUTH_BASE_URL")
+    neon_auth_jwks_url: str = Field(default="", validation_alias="NEON_AUTH_JWKS_URL")
+    evidence_storage: Literal["local", "s3"] = Field(default="local", validation_alias="EVIDENCE_STORAGE")
+    evidence_bucket: str = Field(default="assets", validation_alias="EVIDENCE_BUCKET")
+    aws_access_key_id: str = Field(default="", validation_alias="AWS_ACCESS_KEY_ID", repr=False)
+    aws_secret_access_key: str = Field(default="", validation_alias="AWS_SECRET_ACCESS_KEY", repr=False)
+    aws_endpoint_url_s3: str = Field(default="", validation_alias="AWS_ENDPOINT_URL_S3")
+    aws_region: str = Field(default="", validation_alias="AWS_REGION")
     frigate_url: str = Field(default="http://localhost:5000", validation_alias="FRIGATE_URL")
     go2rtc_url: str = Field(default="http://localhost:1984", validation_alias="GO2RTC_URL")
     frigate_username: str | None = Field(default=None, validation_alias="FRIGATE_USERNAME")
@@ -53,7 +63,15 @@ class Settings(BaseSettings):
         default=False, validation_alias="USE_LOCAL_SECURITY_ENGINE"
     )
     auth_enabled: bool = Field(default=False, validation_alias="AUTH_ENABLED")
+    dashboard_registration_enabled: bool = Field(default=True, validation_alias="DASHBOARD_REGISTRATION_ENABLED")
+    dispatch_notification_provider: Literal["disabled", "recording-fake"] = Field(
+        default="disabled", validation_alias="DISPATCH_NOTIFICATION_PROVIDER")
     evidence_root: str = Field(default="", validation_alias="EVIDENCE_ROOT")
+    reporter_evidence_max_bytes: int = Field(default=10_000_000, ge=1_000_000, validation_alias="REPORTER_EVIDENCE_MAX_BYTES")
+    reporter_evidence_max_files: int = Field(default=5, ge=1, le=50, validation_alias="REPORTER_EVIDENCE_MAX_FILES")
+    reporter_evidence_max_incident_bytes: int = Field(default=50_000_000, ge=1_000_000, validation_alias="REPORTER_EVIDENCE_MAX_INCIDENT_BYTES")
+    reporter_evidence_max_property_bytes: int = Field(default=1_000_000_000, ge=1_000_000, validation_alias="REPORTER_EVIDENCE_MAX_PROPERTY_BYTES")
+    reporter_evidence_min_free_bytes: int = Field(default=1_000_000_000, ge=0, validation_alias="REPORTER_EVIDENCE_MIN_FREE_BYTES")
     mutation_rate_limit_per_minute: int = Field(
         default=30, ge=1, validation_alias="MUTATION_RATE_LIMIT_PER_MINUTE"
     )
@@ -64,6 +82,11 @@ class Settings(BaseSettings):
     jwt_issuer: str | None = Field(default=None, validation_alias="JWT_ISSUER")
     mqtt_host: str = Field(default="localhost", validation_alias="MQTT_HOST")
     mqtt_port: int = Field(default=1883, ge=1, le=65535, validation_alias="MQTT_PORT")
+    mqtt_username: str | None = Field(default=None, validation_alias="MQTT_USERNAME")
+    mqtt_password: str | None = Field(default=None, validation_alias="MQTT_PASSWORD")
+    mqtt_event_queue_size: int = Field(
+        default=256, ge=1, le=10000, validation_alias="MQTT_EVENT_QUEUE_SIZE"
+    )
     frigate_mqtt_topic: str = Field(
         default="frigate/events", validation_alias="FRIGATE_MQTT_TOPIC"
     )
@@ -91,10 +114,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_authentication_configuration(self) -> "Settings":
+        from urllib.parse import urlsplit
+        for endpoint in (self.neon_auth_base_url, self.aws_endpoint_url_s3):
+            if endpoint:
+                parsed = urlsplit(endpoint)
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError("Neon service endpoints must be HTTPS without credentials, query or fragment")
+        if self.evidence_storage == "s3" and not all((self.evidence_bucket, self.aws_access_key_id,
+                self.aws_secret_access_key, self.aws_endpoint_url_s3, self.aws_region)):
+            raise ValueError("S3 evidence requires a bucket and complete AWS_* configuration")
+        if bool(self.mqtt_username) != bool(self.mqtt_password):
+            raise ValueError("MQTT_USERNAME and MQTT_PASSWORD must be configured together")
         if self.auth_enabled and len(self.jwt_secret) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters when authentication is enabled")
         if self.app_env == "production" and not self.auth_enabled:
             raise ValueError("AUTH_ENABLED must be true in production")
+        if self.app_env == "production" and self.dispatch_notification_provider == "recording-fake":
+            raise ValueError("The recording fake notification provider is development-only")
         if self.app_env == "production" and not self.database_url:
             raise ValueError("DATABASE_URL must be configured in production")
         if not self.parsed_cors_origins:

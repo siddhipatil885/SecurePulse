@@ -3,6 +3,7 @@
 import json
 import hashlib
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -40,35 +41,51 @@ class FrigateEventParser:
         camera = self._required_string(event, "camera")
         object_type = self._required_string(event, "label")
         confidence = event.get("top_score")
-        if not isinstance(confidence, (int, float)):
-            raise FrigatePayloadError("Frigate event has no numeric top_score")
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1
+        ):
+            raise FrigatePayloadError("Frigate event has no valid top_score")
 
         # A Frigate event's start time is stable across updates. Preserve it
         # as the incident timestamp, but retain a separate observation time
         # for the live tracker below.
-        timestamp = self._parse_timestamp(
-            event.get("end_time", event.get("start_time", event.get("timestamp")))
-            if lifecycle == "end"
-            else event.get("start_time", event.get("timestamp"))
-        )
+        event_time = event.get("end_time") if lifecycle == "end" else None
+        if event_time is None:
+            event_time = event.get("start_time", event.get("timestamp"))
+        timestamp = self._parse_timestamp(event_time)
         
         # Preserve bounding box as [x1, y1, x2, y2] and tracking metadata
+        ingested_at = datetime.now(timezone.utc)
         metadata = {
+            "source_system": "frigate",
+            "event_phase": lifecycle,
+            "occurred_at": timestamp.isoformat(),
+            "ingested_at": ingested_at.isoformat(),
             "lifecycle": lifecycle,
             "revision": hashlib.sha256(
                 json.dumps(event, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
             ).hexdigest(),
             "zones": event.get("zones", []),
-            "has_snapshot": bool(event.get("has_snapshot", False)),
-            "has_clip": bool(event.get("has_clip", False)),
-            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "has_snapshot": event.get("has_snapshot") is True,
+            "has_clip": event.get("has_clip") is True,
+            "observed_at": ingested_at.isoformat(),
         }
         if isinstance(event.get("face_visible"), bool):
             metadata["face_visible"] = event["face_visible"]
         
         # Extract bounding box if present
         if "box" in event and isinstance(event["box"], (list, tuple)) and len(event["box"]) == 4:
-            metadata["bounding_box"] = list(event["box"])
+            box = event["box"]
+            if all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in box
+            ):
+                metadata["bounding_box"] = list(box)
         for field in ("frame_width", "frame_height"):
             if isinstance(event.get(field), (int, float)):
                 metadata[field] = event[field]
@@ -142,7 +159,12 @@ class FrigateEventParser:
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc)
+            if isinstance(value, bool) or not math.isfinite(value):
+                raise FrigatePayloadError("Frigate timestamp is invalid")
+            try:
+                return datetime.fromtimestamp(value, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError) as error:
+                raise FrigatePayloadError("Frigate timestamp is invalid") from error
         if isinstance(value, str):
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -176,11 +198,16 @@ class FrigateClient:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
+        if self.settings.mqtt_username and self.settings.mqtt_password:
+            self.client.username_pw_set(self.settings.mqtt_username, self.settings.mqtt_password)
         self.client.reconnect_delay_set(
             min_delay=self.settings.mqtt_reconnect_min_delay,
             max_delay=self.settings.mqtt_reconnect_max_delay,
         )
         self._connected = False
+        self.last_event_at: datetime | None = None
+        self.invalid_message_count = 0
+        self.delivery_failure_count = 0
 
     @property
     def connected(self) -> bool:
@@ -251,8 +278,11 @@ class FrigateClient:
     def _on_message(self, client: mqtt.Client, userdata: Any, message: MQTTMessage) -> None:
         try:
             detection = self.parser.parse(message.payload)
+            self.last_event_at = datetime.now(timezone.utc)
             self.on_detection(detection)
         except (FrigatePayloadError, ValueError) as error:
+            self.invalid_message_count += 1
             logger.warning("Rejected malformed Frigate event", extra={"error": str(error)})
         except Exception:
+            self.delivery_failure_count += 1
             logger.exception("Failed to deliver Frigate detection")

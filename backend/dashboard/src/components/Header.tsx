@@ -11,21 +11,12 @@ const Header: React.FC<HeaderProps> = ({ status }) => {
     <header className="header">
       <div className="header-left">
         <h1 className="header-logo">EDI SecurePulse</h1>
-        <nav className="header-nav">
-          <a href="#" className="nav-item active">Dashboard</a>
-          <a href="#" className="nav-item">Cameras</a>
-          <a href="#" className="nav-item">Events</a>
-          <a href="#" className="nav-item">Alerts</a>
-        </nav>
       </div>
       
       <div className="header-right">
         <div className={`status-indicator ${status.online ? 'status-online' : 'status-offline'}`}>
           <span className="status-dot"></span>
-          {status.online ? 'System Online' : 'System Offline'}
-        </div>
-        <div className="user-profile">
-          <span className="user-avatar">OP</span>
+          {status.online ? 'Live updates connected' : 'Live updates disconnected'}
         </div>
       </div>
     </header>

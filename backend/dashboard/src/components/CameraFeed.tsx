@@ -6,12 +6,13 @@ import DetectionOverlay from './DetectionOverlay';
 import './CameraFeed.css';
 
 interface CameraFeedProps {
+  propertyId: number;
   camera: Camera;
   isPrimary: boolean;
   tracks: PersonTrack[];
 }
 
-const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) => {
+const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, tracks }) => {
   const fitMode: 'cover' | 'contain' = import.meta.env.VITE_VIDEO_OBJECT_FIT === 'contain' ? 'contain' : 'cover';
   const [time, setTime] = useState<Date>(new Date());
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
@@ -19,6 +20,12 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
   const setVideoRef = useCallback((element: HTMLVideoElement | null) => {
     setVideoElement(element);
   }, []);
+  const liveTracks = tracks.filter((track, index, all) =>
+    track.cameraId === camera.id
+    && track.objectType === 'person'
+    && track.state === 'ACTIVE'
+    && all.findIndex((candidate) => candidate.cameraId === camera.id && candidate.trackId === track.trackId) === index,
+  );
   
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -39,7 +46,6 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
       connection.ontrack = (event) => {
         if (!disposed) {
           streamVideo.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-          setStreamState('live');
         }
       };
       connection.onconnectionstatechange = () => {
@@ -68,12 +74,15 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
             gatheringComplete();
           });
         }
-        const response = await fetch(frigateWebRtcUrl(camera.id), {
+        if (disposed) return;
+        const response = await fetch(frigateWebRtcUrl(propertyId, camera.id), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/sdp' },
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/sdp', 'X-Dashboard-Request': '1' },
           body: connection.localDescription?.sdp,
         });
         if (!response.ok) throw new Error(`RTC negotiation failed (${response.status})`);
+        if (disposed) return;
         await connection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
       } catch {
         if (!disposed) setStreamState('unavailable');
@@ -86,10 +95,10 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
       if (streamVideo) streamVideo.srcObject = null;
       peer?.close();
     };
-  }, [camera.id, camera.status, videoElement]);
+  }, [propertyId, camera.id, camera.status, videoElement]);
 
   return (
-    <div className={`camera-feed-container ${isPrimary ? 'primary' : 'secondary'} ${camera.status === 'disabled' ? 'offline' : ''}`}>
+    <div data-camera-id={camera.id} data-stream-state={streamState} className={`camera-feed-container ${isPrimary ? 'primary' : 'secondary'} ${camera.status === 'disabled' ? 'offline' : ''}`}>
       <div className="video-placeholder">
         {camera.status === 'enabled' ? (
           <video
@@ -98,6 +107,11 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
             autoPlay
             playsInline
             muted
+            onPlaying={() => setStreamState('live')}
+            onWaiting={() => setStreamState('connecting')}
+            onStalled={() => setStreamState('connecting')}
+            onError={() => setStreamState('unavailable')}
+            onEnded={() => setStreamState('unavailable')}
             aria-label={`Live video from ${camera.name}`}
           />
         ) : (
@@ -108,7 +122,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
         )}
         <DetectionOverlay
           video={videoElement}
-          tracks={tracks}
+          tracks={liveTracks}
           debug={import.meta.env.VITE_DEBUG_DETECTIONS === 'true'}
           fitMode={fitMode}
         />
@@ -121,7 +135,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
       <div className="overlay-top-right">
         <div className={`live-indicator ${camera.status === 'enabled' ? 'online' : 'offline'}`}>
           <span className="live-dot"></span>
-          {camera.status !== 'enabled' ? 'DISABLED' : streamState === 'live' ? 'LIVE' : 'CONNECTING'}
+          {camera.status !== 'enabled' ? 'DISABLED' : streamState === 'live' ? 'LIVE' : streamState === 'unavailable' ? 'UNAVAILABLE' : 'CONNECTING'}
         </div>
       </div>
 
@@ -130,7 +144,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ camera, isPrimary, tracks }) =>
           {time.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}<br/>
           {time.toLocaleTimeString('en-GB')}
         </div>
-        <div className="people-count">Current people: {tracks.length}</div>
+        <div className="people-count">Current people: {liveTracks.length}</div>
       </div>
 
     </div>

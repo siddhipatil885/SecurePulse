@@ -7,3 +7,4 @@ export function parseServerUrl(value: string | undefined): string | null {
   } catch { return null; }
 }
 export const serverUrl = parseServerUrl(process.env.EXPO_PUBLIC_SERVER_URL);
+export const expoProjectId = process.env.EXPO_PUBLIC_EXPO_PROJECT_ID?.trim() || null;

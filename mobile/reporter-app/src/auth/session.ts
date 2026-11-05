@@ -58,6 +58,22 @@ export class SessionManager {
     this.clearQueries();
     this.update({ loading: false, token, profile, message: null });
   };
+  refreshProfile = async () => {
+    const generation = this.generation;
+    const token = this.state.token?.access_token;
+    if (!token) return;
+    try {
+      const profile = await this.api.profile(token);
+      if (generation === this.generation && this.state.token?.access_token === token) {
+        this.checkExpiry();
+        if (this.state.token?.access_token === token) this.update({ ...this.state, profile });
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) this.invalidate(token);
+      throw error;
+    }
+  };
+  passwordChanged = () => { this.clear('Password changed. Sign in with your new password.'); };
   logout = async () => {
     const token = this.state.token?.access_token;
     this.clear();

@@ -64,6 +64,7 @@ async def get_reporter(
     # The existing validator has already checked signature, expiration and issuer.
     claims = jwt.decode(token, options={"verify_signature": False})
     user = await session.get(User, user_id)
-    if user is None or not user.active or not user.password_hash or claims.get("ver") != user.token_version:
+    if (user is None or not user.active or claims.get("ver") != user.token_version
+            or (not user.password_hash and not user.subject.startswith("neon:"))):
         raise ApplicationError("UNAUTHORIZED", "Your session has ended. Please sign in again.", 401)
     return user

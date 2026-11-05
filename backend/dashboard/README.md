@@ -1,7 +1,10 @@
 # SecurePulse Dashboard
 
-The dashboard reads cameras and security events from the backend API. During local
-development, Vite proxies `/api` to `http://localhost:8000` by default.
+The dashboard includes account registration/sign-in, property onboarding and
+switching, live monitoring, incident history, evidence, and audited incident
+actions. See [dashboard setup and verification](../../docs/runbooks/dashboard.md).
+
+During local development, Vite proxies `/api` to `http://localhost:18000` by default.
 
 To use another backend URL, set `VITE_BACKEND_URL` for the dev proxy and
 `VITE_API_BASE_URL` for browser requests, for example:
@@ -17,8 +20,9 @@ When the API is unavailable it shows an error state.
 
 ## Detection overlay
 
-The dashboard loads `/api/v1/tracks` and consumes `person_tracks` messages on
-the existing WebSocket. Each temporary anonymous person track is rendered in a
+The dashboard loads property-scoped `/api/v1/dashboard/properties/{id}/tracks`
+and consumes `person_tracks` messages on that property's authenticated WebSocket.
+Each temporary anonymous person track is rendered in a
 dedicated layer above the WebRTC video. The layer maps normalised detector
 coordinates through the video's `object-fit: cover` rectangle, including crop
 offsets, so boxes remain aligned when the card is resized.

@@ -5,11 +5,14 @@ import SecuritySummary from './SecuritySummary';
 import ActiveAlerts from './ActiveAlerts';
 import RecentEvents from './RecentEvents';
 import CameraStatus from './CameraStatus';
-import { fetchDashboardData, mapAlert, mapEvent, mapTrack } from '../api';
+import IncidentWorkspace from './IncidentWorkspace';
+import OperatorWorkspace from './OperatorWorkspace';
+import { dashboardBase, fetchDashboardData, mapTrack } from '../api';
+import type { DashboardData, PropertyAccess } from '../api';
 import type { Camera, PersonTrack, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
-const Dashboard: React.FC = () => {
+const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
   const [events, setEvents] = useState<SecurityEvent[]>([]);
@@ -17,18 +20,25 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [overview, setOverview] = useState<DashboardData['overview']>({ total_incidents: 0, active_incidents: 0, critical_incidents: 0 });
+  const [revision, setRevision] = useState(0);
+  const [view, setView] = useState<'monitoring' | 'incidents'>('monitoring');
+  const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
   
   const [primaryCameraId, setPrimaryCameraId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetchDashboardData()
+    const controller = new AbortController();
+    fetchDashboardData(property.id, controller.signal, property.role !== 'reporter')
       .then((data) => {
         if (!active) return;
         setCameras(data.cameras);
         setAlerts(data.alerts);
         setEvents(data.events);
         setTracksByCamera(data.tracksByCamera);
+        setOverview(data.overview);
+        setError(null);
         setPrimaryCameraId((current) => current ?? data.cameras[0]?.id ?? null);
       })
       .catch((requestError: unknown) => {
@@ -41,57 +51,52 @@ const Dashboard: React.FC = () => {
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, []);
+  }, [property.id, property.role, revision]);
 
   useEffect(() => {
     let active = true;
-    const socketUrl = import.meta.env.VITE_WS_URL
-      ?? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/events/stream`;
-    const socket = new WebSocket(socketUrl);
-
-    socket.onopen = () => {
-      if (active) setStreamConnected(true);
+    let socket: WebSocket | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | undefined;
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRefresh = () => {
+      if (!active || refresh) return;
+      refresh = setTimeout(() => { refresh = undefined; if (active) setRevision(value => value + 1); }, 150);
     };
-
-    socket.onmessage = (message) => {
-      try {
-        const payload = JSON.parse(message.data) as {
-          type?: string;
-          data?: Parameters<typeof mapEvent>[0];
-        };
-        if (payload.type === 'person_tracks' && payload.data) {
-          const trackData = payload.data as unknown as { camera_id: string; tracks: Parameters<typeof mapTrack>[0][] };
-          setTracksByCamera((current) => ({ ...current, [String(trackData.camera_id)]: trackData.tracks.map(mapTrack) }));
-          return;
-        }
-        if (payload.type !== 'security_event' || !payload.data) return;
-        const incoming = mapEvent(payload.data);
-        setEvents((current) => [
-          incoming,
-          ...current.filter((event) => event.id !== incoming.id),
-        ].slice(0, 100));
-        setAlerts((current) => {
-          const isAlert = ['high', 'critical'].includes(incoming.severity?.toLowerCase() ?? '');
-          if (!isAlert) return current.filter((alert) => alert.id !== incoming.id);
-          return [mapAlert(incoming), ...current.filter((alert) => alert.id !== incoming.id)].slice(0, 100);
-        });
-      } catch {
-        setError('Received an invalid live event from the backend');
-      }
+    const connect = () => {
+      if (!active) return;
+      const url = new URL(`${dashboardBase}/properties/${property.id}/stream`, window.location.origin);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(url);
+      socket.onopen = () => { if (active) { setStreamConnected(true); scheduleRefresh(); } };
+      socket.onmessage = message => {
+        if (!active) return;
+        try {
+          const payload = JSON.parse(message.data) as { type?: string; property_id?: number; data?: { camera_id: string; tracks: Parameters<typeof mapTrack>[0][] } };
+          if (payload.property_id !== property.id) return;
+          if (payload.type === 'person_tracks' && payload.data && Array.isArray(payload.data.tracks)) {
+            const data = payload.data;
+            setTracksByCamera(current => ({ ...current, [String(data.camera_id)]: data.tracks.map(mapTrack) }));
+          } else if (payload.type === 'security_event' || payload.type === 'case_updated') scheduleRefresh();
+        } catch { scheduleRefresh(); }
+      };
+      socket.onerror = () => { if (active) setStreamConnected(false); };
+      socket.onclose = event => {
+        if (!active) return;
+        setStreamConnected(false); setTracksByCamera({});
+        if (event.code === 1008) { scheduleRefresh(); return; }
+        reconnect = setTimeout(connect, 3000);
+      };
     };
-
-    socket.onerror = () => {
-      if (active) setStreamConnected(false);
-    };
-    socket.onclose = () => {
-      if (active) setStreamConnected(false);
-    };
+    connect();
+    const poll = setInterval(scheduleRefresh, 10000);
     return () => {
       active = false;
-      socket.close();
+      clearInterval(poll); clearTimeout(reconnect); clearTimeout(refresh);
+      socket?.close();
     };
-  }, []);
+  }, [property.id]);
 
   const primaryCamera = useMemo(() => cameras.find(c => c.id === primaryCameraId) ?? cameras[0], [cameras, primaryCameraId]);
 
@@ -103,14 +108,17 @@ const Dashboard: React.FC = () => {
 
   const systemStatus: SystemStatus = useMemo(() => ({
     online: !error && streamConnected,
-    activeAlerts: alerts.filter(a => a.status === 'active').length,
-    criticalAlerts: alerts.filter(a => a.status === 'active' && a.severity === 'critical').length,
-    camerasOnline: cameras.filter(c => c.status === 'enabled').length,
+    activeAlerts: overview.active_incidents,
+    criticalAlerts: overview.critical_incidents,
+    camerasOnline: cameras.filter(c => c.healthStatus === 'online').length,
     totalCameras: cameras.length,
-    // Keep a temporarily-lost track in the operator count for the configured
-    // grace period; it has not yet become a departed person/session.
-    peopleDetected: Object.values(tracksByCamera).flat().length
-  }), [alerts, cameras, error, streamConnected, tracksByCamera]);
+    // This is a count of active anonymous person tracks, not historical events
+    // or unique identities. Ended/grace-period tracks are excluded by design.
+    peopleDetected: Object.values(tracksByCamera)
+      .flat()
+      .filter((track) => track.objectType === 'person' && track.state === 'ACTIVE')
+      .length
+  }), [overview, cameras, error, streamConnected, tracksByCamera]);
 
   const handleSelectCamera = (cameraId: string) => {
     setPrimaryCameraId(cameraId);
@@ -121,13 +129,21 @@ const Dashboard: React.FC = () => {
       <Header status={systemStatus} />
       
       <main className="dashboard-main">
+        <nav className="workspace-tabs" aria-label="Dashboard views"><button aria-pressed={view === 'monitoring'} onClick={() => setView('monitoring')}>Live monitoring</button>
+          <button aria-pressed={view === 'incidents'} onClick={() => setView('incidents')}>Incidents ({overview.total_incidents})</button></nav>
+        {!streamConnected && <p role="status">Live connection interrupted. Reconnecting; data refreshes automatically.</p>}
+        {view === 'incidents' && (property.role === 'reporter'
+          ? <IncidentWorkspace key={`${property.id}:${selectedIncident ?? 'list'}`} property={property} initialId={selectedIncident} refreshVersion={revision} onChanged={() => setRevision(value => value + 1)} />
+          : <OperatorWorkspace key={`${property.id}:${selectedIncident ?? 'list'}`} propertyId={property.id} initialCameraId={selectedIncident} refreshVersion={revision} onChanged={() => setRevision(value => value + 1)} />)}
+        {view === 'monitoring' && <>
         {loading && <div className="empty-state">Loading dashboard data...</div>}
         {error && <div className="empty-state">Unable to load dashboard data: {error}</div>}
         {!loading && !error && !primaryCamera && <div className="empty-state">No cameras are configured.</div>}
         {!loading && !error && primaryCamera && (
-          <>
+          <div className="monitor-layout">
         <div className="dashboard-center-section">
           <CameraMonitor 
+            propertyId={property.id}
             primaryCamera={primaryCamera} 
             secondaryCameras={secondaryCameras} 
             onSelectCamera={handleSelectCamera}
@@ -137,12 +153,13 @@ const Dashboard: React.FC = () => {
         
         <div className="dashboard-right-sidebar">
           <SecuritySummary status={systemStatus} />
-          <ActiveAlerts alerts={alerts} />
-          <RecentEvents events={events} />
+          <ActiveAlerts alerts={alerts} onSelect={id => { setSelectedIncident(id); setView('incidents'); }} />
+          <RecentEvents events={events} onSelect={id => { setSelectedIncident(id); setView('incidents'); }} />
           <CameraStatus cameras={cameras} />
         </div>
-          </>
+          </div>
         )}
+        </>}
       </main>
     </div>
   );

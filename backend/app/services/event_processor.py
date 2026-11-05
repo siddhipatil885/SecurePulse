@@ -25,6 +25,7 @@ from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.realtime.publisher import EventPublisher
 from app.services.person_tracker import PersonTracker, TrackedPerson
+from app.services.metadata_budget import compact_metadata, metadata_digest
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,9 @@ class EventProcessor:
             event_phase=lifecycle,
             revision=revision,
             observed_at=detection.timestamp,
-            payload={"metadata": detection.metadata, "object_type": detection.object_type},
+            # Receipt identity already records source/phase/revision. Keep a
+            # checksum rather than copying raw camera metadata on every update.
+            payload={"metadata_sha256": metadata_digest(detection.metadata), "object_type": detection.object_type},
         )
 
         # Frigate's event ID is its native object-track identifier. Project
@@ -191,11 +194,11 @@ class EventProcessor:
                 previous_status = existing.status
                 existing.object_type = detection.object_type
                 existing.confidence = detection.confidence
-                existing.event_metadata = {
+                existing.event_metadata = compact_metadata({
                     **(existing.event_metadata or {}),
                     **detection.metadata,
                     **self._track_metadata(track),
-                }
+                })
 
                 # End events carry the final timestamp and close the record.
                 if lifecycle == "end":
@@ -454,7 +457,7 @@ class EventProcessor:
             return
         await self.publisher.publish_tracks(
             camera_id,
-            self.person_tracker.tracks_for_camera(camera_id),
+            self.person_tracker.tracks_for_camera(camera_id, include_lost=False),
             property_id,
         )
 
@@ -548,7 +551,7 @@ class EventProcessor:
             zone=zone,
             frigate_event_id=detection.source_event_id,
             reason=decision.reason if decision else None,
-            event_metadata=event_metadata,
+            event_metadata=compact_metadata(event_metadata),
         )
 
     @staticmethod

@@ -9,5 +9,7 @@ export default function AppLayout() {
     <Stack.Screen name="profile" options={{ title: 'Profile' }} />
     <Stack.Screen name="settings" options={{ title: 'Settings' }} />
     <Stack.Screen name="report" options={{ title: 'Report incident' }} />
+    <Stack.Screen name="incidents/index" options={{ title: 'My reports' }} />
+    <Stack.Screen name="incidents/[id]" options={{ title: 'Incident report' }} />
   </Stack>;
 }

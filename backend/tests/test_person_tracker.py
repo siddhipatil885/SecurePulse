@@ -41,6 +41,16 @@ def test_temporary_loss_is_reacquired_without_a_new_identity() -> None:
     assert recovered.state == "ACTIVE"
 
 
+def test_live_snapshot_excludes_ended_tracks_but_can_include_grace_tracks() -> None:
+    tracker = PersonTracker()
+    start = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
+    tracker.observe(detection(lifecycle="new", at=start), "1")
+    tracker.observe(detection(lifecycle="end", at=start + timedelta(seconds=1)), "1")
+
+    assert tracker.snapshot() == {"1": []}
+    assert len(tracker.snapshot(include_lost=True)["1"]) == 1
+
+
 def test_track_expires_after_loss_timeout_and_new_person_gets_new_session() -> None:
     tracker = PersonTracker(lost_track_timeout_seconds=2)
     start = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)

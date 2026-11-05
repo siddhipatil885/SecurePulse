@@ -1,0 +1,28 @@
+# Runtime configuration is passed by Compose, never baked into images.
+.env
+.env.*
+**/.env
+**/.env.*
+**/passwordfile
+
+# Local dependencies, build products and test output.
+.venv/
+venv/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+dashboard/dist/
+dashboard/test-results/
+dashboard/playwright-report/
+
+# Media and live databases belong in persistent storage, not image layers.
+operational-evidence/
+frigate/media/
+frigate/storage/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+mediamtx/*.exe
+mediamtx/*.zip
+.git/

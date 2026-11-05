@@ -6,6 +6,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { createApi, ApiError } from '../api/client';
 import { serverUrl } from '../config';
 import { SessionManager } from './session';
+import { canReport } from '../api/types';
 
 export const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, gcTime: 300_000, retry: (count, error) => count < 1 && !(error instanceof ApiError && error.status && error.status < 500) }, mutations: { retry: false } } });
 const storageKey = 'securepulse.reporter.session.v2';
@@ -21,7 +22,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const state = useSyncExternalStore(session.subscribe, session.snapshot);
   const [selected, setSelected] = useState<number | null>(null);
   const [online, setOnline] = useState(true);
-  const propertyId = state.profile?.properties.find(p => p.id === selected)?.id ?? state.profile?.properties[0]?.id ?? null;
+  const properties = state.profile?.properties.filter(canReport) ?? [];
+  const propertyId = properties.find(p => p.id === selected)?.id ?? properties[0]?.id ?? null;
   useEffect(() => { void session.restore(); }, []);
   useEffect(() => {
     if (!state.profile) setSelected(null);
@@ -38,6 +40,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
     return () => { unsubscribe(); listener.remove(); };
   }, []);
-  return <QueryClientProvider client={queryClient}><AuthContext.Provider value={{ state, propertyId, selectProperty: setSelected, online }}>{children}</AuthContext.Provider></QueryClientProvider>;
+  const selectProperty = (id: number) => { if (properties.some(property => property.id === id)) setSelected(id); };
+  return <QueryClientProvider client={queryClient}><AuthContext.Provider value={{ state, propertyId, selectProperty, online }}>{children}</AuthContext.Provider></QueryClientProvider>;
 }
 export function useAuth() { const auth = useContext(AuthContext); if (!auth) throw new Error('AuthProvider is required'); return auth; }

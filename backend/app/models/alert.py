@@ -24,6 +24,8 @@ class Alert(Base):
     )
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     camera = relationship("Camera", back_populates="alerts")
     security_event = relationship("SecurityEvent")

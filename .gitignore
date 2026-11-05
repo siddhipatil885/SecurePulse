@@ -1,0 +1,8 @@
+# Local configuration and credentials, including the supplied source file.
+/env
+.env
+.env.*
+!.env.example
+!*.env.example
+.neon
+node_modules/

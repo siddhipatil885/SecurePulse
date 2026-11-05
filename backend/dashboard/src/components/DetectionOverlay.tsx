@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useState } from 'react';
 import type { PersonTrack } from '../types';
+import { projectBox } from './overlayGeometry';
 import './DetectionOverlay.css';
 
 interface DetectionOverlayProps {
@@ -17,6 +18,21 @@ interface RenderedBox {
   height: number;
 }
 
+const classColors: Record<string, string> = {
+  person: '#2ce6a6',
+  bicycle: '#4cc9f0',
+  car: '#4cc9f0',
+  motorcycle: '#f4a261',
+  bus: '#f4a261',
+  truck: '#f4a261',
+  cat: '#c77dff',
+  dog: '#c77dff',
+};
+
+function objectColor(objectType: string): string {
+  return classColors[objectType.toLowerCase()] ?? '#ffd166';
+}
+
 function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[], fitMode: 'cover' | 'contain'): RenderedBox[] {
   if (!video) return [];
   const container = video.parentElement;
@@ -25,28 +41,21 @@ function calculateBoxes(video: HTMLVideoElement | null, tracks: PersonTrack[], f
   const containerHeight = container.clientHeight;
   if (!containerWidth || !containerHeight) return [];
 
-  // The video uses object-fit: cover. Its displayed rectangle may extend
-  // beyond the container, so map detector coordinates through that rectangle
-  // rather than the browser viewport.
+  // Backend boxes are already normalized to the detector frame. Map them
+  // through the video's displayed rectangle, including cover/contain offsets.
+  // Multiplying by detector dimensions again misaligns higher-resolution video.
   return tracks.flatMap((track) => {
     if (!track.boundingBox) return [];
     const sourceWidth = video.videoWidth || track.frameWidth;
     const sourceHeight = video.videoHeight || track.frameHeight;
     if (!sourceWidth || !sourceHeight) return [];
-    const scale = fitMode === 'contain'
-      ? Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight)
-      : Math.max(containerWidth / sourceWidth, containerHeight / sourceHeight);
-    const renderedWidth = sourceWidth * scale;
-    const renderedHeight = sourceHeight * scale;
-    const offsetX = (containerWidth - renderedWidth) / 2;
-    const offsetY = (containerHeight - renderedHeight) / 2;
-    const box = track.boundingBox;
+    const box = projectBox(track.boundingBox, containerWidth, containerHeight, sourceWidth, sourceHeight, fitMode);
     return [{
       track,
-      left: offsetX + box.x * renderedWidth,
-      top: offsetY + box.y * renderedHeight,
-      width: box.width * renderedWidth,
-      height: box.height * renderedHeight,
+      left: box.x,
+      top: box.y,
+      width: box.width,
+      height: box.height,
     }];
   });
 }
@@ -62,21 +71,28 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ video, tracks, debu
     observer.observe(video);
     if (video.parentElement) observer.observe(video.parentElement);
     video.addEventListener('loadedmetadata', update);
+    video.addEventListener('resize', update);
+    video.addEventListener('emptied', update);
     return () => {
       observer.disconnect();
       video.removeEventListener('loadedmetadata', update);
+      video.removeEventListener('resize', update);
+      video.removeEventListener('emptied', update);
     };
   }, [video, tracks, fitMode]);
 
   return (
-    <div className="detection-overlay" aria-label={`${tracks.length} currently tracked people`}>
-      {boxes.map(({ track, left, top, width, height }, index) => (
+    <div className="detection-overlay" aria-label={`${tracks.length} currently tracked objects`}>
+      {boxes.map(({ track, left, top, width, height }) => (
         <div
-          className={`person-box ${track.state === 'TEMPORARILY_LOST' ? 'lost' : ''}`}
+          className={`detection-box detection-box-${track.objectType.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`}
           key={track.trackId}
-          style={{ left, top, width, height }}
+          data-track-id={track.trackId}
+          style={{ left, top, width, height, '--detection-color': objectColor(track.objectType) } as React.CSSProperties}
         >
-          <span className="person-box-label">Person {index + 1}</span>
+          <span className="person-box-label">
+            {track.objectType.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())} {Math.round(track.confidence * 100)}%
+          </span>
           {debug && <span className="person-box-debug">{track.trackId} · {Math.round(track.confidence * 100)}%</span>}
         </div>
       ))}

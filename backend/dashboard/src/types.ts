@@ -4,10 +4,12 @@ export interface Camera {
   frigateCameraName: string;
   status: 'enabled' | 'disabled';
   lastSeen: string;
+  healthStatus?: string;
 }
 
 export interface SecurityEvent {
   id: string;
+  propertyId?: number;
   cameraId: string;
   type: string;
   objectType?: string;
@@ -37,7 +39,7 @@ export interface BoundingBox {
 export interface PersonTrack {
   trackId: string;
   cameraId: string;
-  objectType: 'person';
+  objectType: string;
   firstSeen: string;
   lastSeen: string;
   boundingBox: BoundingBox | null;
