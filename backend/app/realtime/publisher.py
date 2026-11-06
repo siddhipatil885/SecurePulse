@@ -16,6 +16,9 @@ class EventPublisher(Protocol):
         self, camera_id: str, tracks: list[dict[str, object]], property_id: int | None = None
     ) -> None: ...
     async def publish_case(self, property_id: int, key: str) -> None: ...
+    async def publish_marshal_location(
+        self, property_id: int, assignment_id: int, location: dict[str, object]
+    ) -> None: ...
 
 
 class InMemoryEventPublisher:
@@ -47,6 +50,22 @@ class InMemoryEventPublisher:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 logger.warning("Dropped case update for a slow subscriber")
+
+    async def publish_marshal_location(
+        self, property_id: int, assignment_id: int, location: dict[str, object]
+    ) -> None:
+        payload = {
+            "type": "marshal_location",
+            "property_id": property_id,
+            "data": {"assignment_id": assignment_id, "location": location},
+        }
+        for queue, property_ids in tuple(self._subscribers.items()):
+            if property_ids is not None and property_id not in property_ids:
+                continue
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                logger.warning("Dropped marshal location update for a slow subscriber")
 
     async def publish(self, event: SecurityEvent) -> None:
         payload = {

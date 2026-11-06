@@ -78,6 +78,7 @@ async def factory():
         await session.flush()
 
         profile = MarshalProfile(
+            verification_status='APPROVED',
             id=1,
             user_id=1,
             property_id=1,
@@ -85,6 +86,7 @@ async def factory():
             capacity=1,
         )
         profile2 = MarshalProfile(
+            verification_status='APPROVED',
             id=2,
             user_id=2,
             property_id=1,

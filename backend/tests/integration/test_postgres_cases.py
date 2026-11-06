@@ -27,7 +27,7 @@ async def seed(factory, capacity=2):
         user = User(subject=marker, email=f"{marker}@example.test", active=True)
         session.add_all([property, user])
         await session.flush()
-        profile = MarshalProfile(user_id=user.id, property_id=property.id, capacity=capacity)
+        profile = MarshalProfile(user_id=user.id, property_id=property.id, capacity=capacity, verification_status='APPROVED')
         session.add_all([profile, PropertyMembership(user_id=user.id, property_id=property.id, role="marshal")])
         await session.flush()
         session.add(MarshalAvailability(marshal_profile_id=profile.id, on_duty=True, available=True,

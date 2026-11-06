@@ -74,6 +74,7 @@ class EventProcessor:
         event_cooldown_seconds: float = 30.0,
         person_tracker: PersonTracker | None = None,
         security_engine_supports_tracking: bool = False,
+        alert_routing_destinations: tuple[str, ...] = (),
     ) -> None:
         self.session = session
         self.camera_repository = camera_repository
@@ -84,6 +85,7 @@ class EventProcessor:
         self.event_cooldown_seconds = event_cooldown_seconds
         self.person_tracker = person_tracker
         self.security_engine_supports_tracking = security_engine_supports_tracking
+        self.alert_routing_destinations = alert_routing_destinations
 
     async def process(self, detection: DetectionEvent) -> EventProcessResult:
         """Process one detection with an idempotent database transaction."""
@@ -383,6 +385,26 @@ class EventProcessor:
                     },
                 )
             )
+            if event.severity in {"HIGH", "CRITICAL"}:
+                for destination in self.alert_routing_destinations:
+                    digest = hashlib.sha256(
+                        f"{incident_key}:{destination}".encode()
+                    ).hexdigest()
+                    await self._add(NotificationOutbox(
+                        property_id=event.property_id,
+                        security_event_id=event.id,
+                        kind="INCIDENT_EXTERNAL_ALERT",
+                        destination=destination,
+                        dedupe_key=f"incident:{digest}:external",
+                        status="PENDING",
+                        payload={
+                            "incident_id": event.id,
+                            "camera_id": event.camera_id,
+                            "severity": event.severity,
+                            "event_type": event.event_type,
+                            "reason": event.reason,
+                        },
+                    ))
 
     async def _apply_correlated_decision(
         self,

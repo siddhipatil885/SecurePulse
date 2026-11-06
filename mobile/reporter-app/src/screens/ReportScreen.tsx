@@ -33,7 +33,8 @@ export function ReportScreen() {
   useEffect(() => () => { controller.current?.abort(); }, []);
 
   async function useCurrentLocation() {
-    setError(null);
+    if (busy) return;
+    setBusy(true); setError(null);
     try {
     const permission = await Location.requestForegroundPermissionsAsync();
     if (permission.status !== 'granted') {
@@ -44,8 +45,11 @@ export function ReportScreen() {
     if (submission.started) return;
     setLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy ?? undefined });
     } catch { setError('Unable to read your location. Enter the address instead.'); }
+    finally { setBusy(false); }
   }
   async function chooseEvidence() {
+    if (busy) return;
+    setBusy(true); setError(null);
     try {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], quality: 0.8 });
     if (!result.canceled && result.assets[0]) {
@@ -55,8 +59,10 @@ export function ReportScreen() {
       setAttachment(next);
     }
     } catch { setError('Unable to select evidence. Try another file.'); }
+    finally { setBusy(false); }
   }
   async function submit() {
+    if (busy) return;
     if (!submission.started && (!propertyId || (!address.trim() && !location) || !type)) {
       setError('Choose an incident type and provide an address or current location.');
       return;
@@ -87,10 +93,10 @@ export function ReportScreen() {
     <Text style={ui.heading}>What happened?</Text>
     {categories.map(([value, label]) => <PrimaryButton key={value} disabled={busy || submission.started} variant={type === value ? 'primary' : 'secondary'} label={label} onPress={() => setType(value)} />)}
     <Text style={ui.label}>Description (optional)</Text>
-    <TextInput editable={!busy && !submission.started} style={[ui.input, { minHeight: 110, textAlignVertical: 'top' }]} multiline maxLength={4000}
+    <TextInput accessibilityLabel="Incident description" editable={!busy && !submission.started} style={[ui.input, { minHeight: 110, textAlignVertical: 'top' }]} multiline maxLength={4000}
       placeholder="Describe what you observed." placeholderTextColor="#64748b" value={description} onChangeText={setDescription} />
     <Text style={ui.heading}>Where did it happen?</Text>
-    <TextInput editable={!busy && !submission.started} style={ui.input} maxLength={1000} placeholder="Enter the incident address" placeholderTextColor="#64748b"
+    <TextInput accessibilityLabel="Incident address" editable={!busy && !submission.started} style={ui.input} maxLength={1000} placeholder="Enter the incident address" placeholderTextColor="#64748b"
       value={address} onChangeText={setAddress} />
     <PrimaryButton disabled={busy || submission.started} variant="secondary" label={location ? `Location captured (${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)})` : 'Use current location'} onPress={() => void useCurrentLocation()} />
     <Text style={ui.heading}>Evidence (optional)</Text>
@@ -98,7 +104,7 @@ export function ReportScreen() {
     {attachment && <PrimaryButton variant="secondary" label="Remove attachment" disabled={busy} onPress={() => { if (submission.started) submission.setAttachment(null); setAttachment(null); }} />}
     {error && <Text accessibilityRole="alert" style={ui.error}>{error}</Text>}
     <Notice>Only submit information you are authorized to share. For immediate danger, contact your official emergency services.</Notice>
-    <PrimaryButton label={busy ? 'Submitting…' : submission.started ? 'Retry existing submission' : 'Confirm and submit report'} disabled={busy || (!propertyId && !submission.started)} onPress={() => void submit()} />
+    <PrimaryButton label={busy ? 'Please wait…' : submission.started ? 'Retry existing submission' : 'Confirm and submit report'} disabled={busy || (!propertyId && !submission.started)} onPress={() => void submit()} />
     {submission.incidentId && <PrimaryButton variant="secondary" label="Open saved report" disabled={busy} onPress={() => router.replace({ pathname: '/incidents/[id]', params: { id: String(submission.incidentId) } })} />}
   </Screen>;
 }

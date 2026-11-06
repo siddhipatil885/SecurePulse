@@ -13,11 +13,12 @@ from app.core.auth import Principal
 from app.core.config import get_settings
 from app.core.dependencies import get_session, get_event_publisher, get_mutation_rate_limiter
 from app.core.exceptions import ApplicationError
-from app.models import Assignment, AuditRecord, User
+from app.models import Assignment, AuditRecord, NotificationAttempt, NotificationOutbox, User
 from app.repositories.dispatch import DispatchRepository
 from app.schemas.case import (AssignmentCancel, CaseAssignmentPage, CaseCommand, CaseDetail,
     CaseEvidencePage, CaseOffer, CasePage, CaseSeverity, CaseSource, CaseStatus, CaseTimelinePage, OperatorMarshal)
 from app.schemas.dispatch import OfferView
+from app.schemas.report import IncidentReport, NotificationReport
 from app.services.case_service import CaseService, assignment_filter
 from app.services.dispatch_service import DispatchService
 from app.services.reporter_storage import ReporterStorage
@@ -83,6 +84,72 @@ async def evidence(property_id: int, source: CaseSource, source_id: int,
     result = await CaseService(session).evidence(property_id, source, source_id, page, page_size)
     await audit(session, property_id, source, source_id, principal.subject, "CASE_EVIDENCE_LISTED")
     return result
+
+
+@router.get("/{source}/{source_id}/report", response_model=IncidentReport)
+async def report(property_id: int, source: CaseSource, source_id: int,
+                 principal: Principal = Depends(operator), session: AsyncSession = Depends(get_session)):
+    service = CaseService(session)
+    incident = await service.detail(property_id, source, source_id)
+    timeline_page = await service.timeline(property_id, source, source_id, 1, 100)
+    evidence_page = await service.evidence(property_id, source, source_id, 1, 100)
+    assignments = list((await session.scalars(
+        select(Assignment).where(
+            Assignment.property_id == property_id,
+            assignment_filter(source, source_id),
+        ).order_by(Assignment.offered_at, Assignment.id)
+    )).all())
+    outboxes = list((await session.scalars(
+        select(NotificationOutbox).where(
+            NotificationOutbox.property_id == property_id,
+        ).order_by(NotificationOutbox.created_at, NotificationOutbox.id)
+    )).all())
+    outboxes = [
+        row for row in outboxes
+        if (row.security_event_id == source_id if source == "camera"
+            else (row.payload or {}).get("reporter_incident_id") == source_id)
+    ]
+    notification_rows = []
+    for row in outboxes:
+        attempts = list((await session.scalars(
+            select(NotificationAttempt).where(NotificationAttempt.outbox_id == row.id)
+            .order_by(NotificationAttempt.attempt_number)
+        )).all())
+        notification_rows.append(NotificationReport(
+            kind=row.kind,
+            destination=row.destination,
+            status=row.status,
+            attempts=len(attempts),
+            last_attempt_at=attempts[-1].attempted_at if attempts else None,
+        ))
+    occurred_at = incident.occurred_at
+    resolved_at = next(
+        (item.occurred_at for item in reversed(timeline_page.items)
+         if item.status in {"RESOLVED", "CLOSED", "COMPLETED"}),
+        None,
+    )
+    duration = (resolved_at - occurred_at).total_seconds() if resolved_at else None
+    await audit(session, property_id, source, source_id, principal.subject, "CASE_REPORT_GENERATED")
+    return IncidentReport(
+        generated_at=datetime.now(timezone.utc),
+        incident=incident,
+        timeline=timeline_page.items,
+        evidence=evidence_page.items,
+        assignments=[OfferView.model_validate(item) for item in assignments],
+        notifications=notification_rows,
+        metrics={
+            "response_duration_seconds": duration,
+            "dispatch_count": len(assignments),
+            "notification_count": len(notification_rows),
+        },
+        tracking={
+            "location_history_included": False,
+            "latest_location_included": bool(
+                incident.latest_assignment and incident.latest_assignment.responder_location
+            ),
+            "note": "Historical GPS points are not retained in this deployment.",
+        },
+    )
 
 
 async def audit(session, property_id, source, source_id, actor, action, details=None):

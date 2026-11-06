@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.cameras import router as cameras_router
 from app.api.dispatch import router as dispatch_router
+from app.api.marshal import router as marshal_router
+from app.api.marshal_onboarding import router as marshal_onboarding_router
 from app.api.evidence import router as evidence_router
 from app.api.events import router as events_router
 from app.api.frigate import router as frigate_router
@@ -22,11 +24,20 @@ from app.api.reporter import router as reporter_router
 from app.api.tracks import router as tracks_router
 from app.api.dashboard import router as dashboard_router
 from app.api.operator_cases import router as operator_cases_router
+from app.api.reporter_live import router as reporter_live_router
+from app.api.account_recovery import router as account_recovery_router
 from app.core.config import get_settings
 from app.core.dependencies import get_event_publisher, get_person_tracker
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.upload_limit import EvidenceUploadLimitMiddleware
+from app.services.expo_push import ExpoPushWorker
+from app.services.alert_routing import (
+    AlertRoutingProvider,
+    EmergencyWebhookProvider,
+    TwilioAlertProvider,
+    TwilioConfig,
+)
 from app.database.database import dispose_database, get_session_factory
 from app.domain.events import DetectionEvent
 from app.integrations.local_security_engine import LocalSecurityEngine
@@ -35,6 +46,7 @@ from app.repositories.cameras import CameraRepository
 from app.repositories.events import EventRepository
 from app.services.dispatch_workers import (
     NotificationDispatcher,
+    ExternalAlertDispatcher,
     RecordingFakeProvider,
     TimeoutEscalator,
 )
@@ -102,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                             using_local_security_engine
                             or settings.security_engine_supports_tracking
                         ),
+                        alert_routing_destinations=settings.parsed_alert_routing_destinations,
                     )
                     result = await processor.process(detection)
                     logger.info(
@@ -230,6 +243,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.notification_provider = fake_provider
             notification_worker = NotificationDispatcher(session_factory, fake_provider,
                 worker_id="local-fake-provider") if fake_provider is not None else None
+            if settings.dispatch_notification_provider == 'expo':
+                notification_worker = ExpoPushWorker(session_factory, settings.expo_push_access_token)
+            if settings.dispatch_notification_provider == "routing":
+                routing_provider = AlertRoutingProvider(
+                    TwilioAlertProvider(TwilioConfig(
+                        settings.twilio_account_sid,
+                        settings.twilio_auth_token,
+                        settings.twilio_sms_from,
+                        settings.twilio_voice_from,
+                        settings.twilio_whatsapp_from,
+                    )) if settings.twilio_account_sid else None,
+                    EmergencyWebhookProvider({
+                        "police": settings.emergency_police_webhook_url,
+                        "fire": settings.emergency_fire_webhook_url,
+                        "ambulance": settings.emergency_ambulance_webhook_url,
+                    }, settings.emergency_webhook_secret) if any((
+                        settings.emergency_police_webhook_url,
+                        settings.emergency_fire_webhook_url,
+                        settings.emergency_ambulance_webhook_url,
+                    )) else None,
+                )
+                notification_worker = ExternalAlertDispatcher(session_factory, routing_provider)
 
             while True:
                 try:
@@ -322,7 +357,11 @@ def create_app() -> FastAPI:
     app.include_router(properties_router, prefix="/api/v1")
     app.include_router(evidence_router, prefix="/api/v1")
     app.include_router(reporter_router, prefix="/api/v1")
+    app.include_router(reporter_live_router, prefix="/api/v1")
+    app.include_router(account_recovery_router, prefix="/api/v1")
     app.include_router(dispatch_router, prefix="/api/v1")
+    app.include_router(marshal_router, prefix="/api/v1")
+    app.include_router(marshal_onboarding_router, prefix="/api/v1")
     app.include_router(dashboard_router, prefix="/api/v1")
     app.include_router(operator_cases_router, prefix="/api/v1")
     register_exception_handlers(app)

@@ -5,9 +5,13 @@ import { useCameras, useDetail, useReviewEvent } from '../api/queries';
 import { Screen } from '../components/Screen';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Notice, PropertyBanner, QueryState, ui } from '../components/Content';
+import { useAuth } from '../auth/AuthProvider';
+import { LiveCamera } from '../components/LiveCamera';
+import { AssignMarshal } from '../components/AssignMarshal';
 
 function useId() { const { id } = useLocalSearchParams<{ id: string }>(); return typeof id === 'string' && /^[1-9]\d*$/.test(id) ? Number(id) : NaN; }
 export function AlertDetailScreen() {
+  const { propertyId } = useAuth();
   const id = useId(); const query = useDetail('event', id); const cameras = useCameras();
   const reviewEvent = useReviewEvent();
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -34,11 +38,13 @@ export function AlertDetailScreen() {
         <PrimaryButton variant="secondary" label={reviewing ? 'Reviewing…' : 'Dismiss as false alarm'} onPress={() => void review('FALSE_ALARM')} disabled={reviewing} />
       </> : <Notice>Alert review status: {event.alert_status ?? 'not an operator alert'}.</Notice>}
       {reviewError && <Text accessibilityRole="alert" style={ui.error}>{reviewError}</Text>}
+      {propertyId !== null && <AssignMarshal key={`${propertyId}:${id}`} propertyId={propertyId} source="camera" incidentId={id} status={event.status} />}
       <PrimaryButton label="Report incident" onPress={() => router.push({ pathname: '/report', params: { eventId: event.id } })} />
     </>}
   </Screen>;
 }
 export function CameraDetailScreen() {
+  const { propertyId } = useAuth();
   const id = useId(); const query = useDetail('camera', id);
   const camera = query.data && 'enabled' in query.data ? query.data : null;
   return <Screen><PropertyBanner />
@@ -46,8 +52,8 @@ export function CameraDetailScreen() {
     {!query.isError && camera && <>
       <Text style={ui.title}>{camera.name}</Text><Notice>{camera.location ?? 'No location provided'}</Notice>
       <Notice>Configuration: {camera.enabled ? 'enabled' : 'disabled'}</Notice>
-      <Notice>Connection status: unverified. Live camera health is not available from the server.</Notice>
-      <Notice>Live streaming is not available in this version.</Notice>
+      <Notice>Camera status: {camera.connection_status === 'unknown' ? 'Unable to verify camera health' : camera.connection_status}</Notice>
+      {propertyId !== null && <LiveCamera key={`${propertyId}:${id}`} propertyId={propertyId} cameraId={id} enabled={camera.enabled} />}
     </>}
   </Screen>;
 }

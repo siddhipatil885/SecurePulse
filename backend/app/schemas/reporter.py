@@ -42,7 +42,7 @@ class ReporterCamera(BaseModel):
     name: str
     location: str | None
     enabled: bool
-    connection_status: Literal["unknown"] = "unknown"
+    connection_status: Literal["unknown", "online", "offline", "disabled"] = "unknown"
 
 
 class ReporterEvent(BaseModel):
@@ -74,7 +74,7 @@ class ReporterSummary(BaseModel):
     active_alert_count: int
     connected_camera_count: int | None = None
     active_incident_count: int | None = None
-    security_status: Literal["unknown"] = "unknown"
+    security_status: Literal["unknown", "attention_required", "camera_issue", "no_active_incidents"] = "unknown"
 
 
 IncidentType = Literal[

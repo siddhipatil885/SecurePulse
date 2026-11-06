@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 import jwt
 from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFile
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import raiseload, selectinload
 from starlette.concurrency import run_in_threadpool
@@ -27,9 +27,14 @@ from app.schemas.reporter import (LoginRequest, PropertyAccess, ReporterCamera, 
     NotificationPreferenceResponse, AlertReviewRequest, ReporterProfileUpdate,
     ReporterPasswordChange)
 from app.models.operations import NotificationPreference, UserDeviceToken
+from app.models import NotificationOutbox
 from app.core.config import get_settings
 from app.integrations.neon_auth import NeonAuth
 from app.services.reporter_storage import ReporterStorage
+from app.services.camera_health import camera_states
+from app.core.rate_limit import SlidingWindowRateLimiter
+
+push_test_limiter = SlidingWindowRateLimiter(3)
 
 def private_response(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
@@ -142,6 +147,11 @@ async def register_device(
     user: User = Depends(get_reporter),
     session: AsyncSession = Depends(get_session),
 ):
+    from app.services.expo_push import TOKEN
+    if body.provider == 'expo' and not TOKEN.fullmatch(body.push_token):
+        raise ApplicationError('INVALID_PUSH_TOKEN', 'Register a valid Expo device token.', 422)
+    await session.execute(update(UserDeviceToken).where(UserDeviceToken.user_id != user.id,
+        or_(UserDeviceToken.device_id == body.device_id, UserDeviceToken.push_token == body.push_token)).values(active=False))
     device = await session.scalar(select(UserDeviceToken).where(
         UserDeviceToken.user_id == user.id, UserDeviceToken.device_id == body.device_id
     ))
@@ -201,14 +211,46 @@ async def update_notification_preference(
 
 async def allowed_property(property_id: int = Query(ge=1), user: User = Depends(get_reporter),
                            session: AsyncSession = Depends(get_session)) -> int:
-    membership = await session.scalar(select(PropertyMembership).where(
+    membership = await session.scalar(select(PropertyMembership).join(Property).where(
         PropertyMembership.user_id == user.id,
         PropertyMembership.property_id == property_id,
         PropertyMembership.active.is_(True),
+        Property.active.is_(True),
     ))
     if membership is None or membership.role not in {"owner", "reporter"}:
         raise ApplicationError("FORBIDDEN", "You do not have access to this property.", 403)
     return property_id
+
+
+@router.post('/reporter/notifications/test', status_code=202)
+async def test_push(property_id: int = Depends(allowed_property), user: User = Depends(get_reporter),
+                    session: AsyncSession = Depends(get_session)):
+    if get_settings().dispatch_notification_provider != 'expo':
+        raise ApplicationError('PUSH_NOT_CONFIGURED', 'Expo delivery is not enabled on this host.', 503)
+    retry = await push_test_limiter.check(str(user.id))
+    if retry:
+        raise ApplicationError('RATE_LIMITED', 'Wait before sending another test.', 429, {'Retry-After': str(retry)})
+    preference = await session.scalar(select(NotificationPreference).where(NotificationPreference.user_id == user.id,
+        NotificationPreference.enabled.is_(True)).order_by(NotificationPreference.category).limit(1))
+    device = await session.scalar(select(UserDeviceToken.id).where(UserDeviceToken.user_id == user.id,
+        UserDeviceToken.active.is_(True), UserDeviceToken.provider == 'expo').limit(1))
+    if not preference or not device:
+        raise ApplicationError('PUSH_NOT_REGISTERED', 'Enable a notification category and register this device first.', 409)
+    row = NotificationOutbox(property_id=property_id, kind='PUSH_SELF_TEST', destination=f'reporter:{user.id}',
+        dedupe_key='self-test:' + str(uuid4()), payload={'category': preference.category, 'user_id': user.id})
+    session.add(row); await session.commit()
+    return {'id': row.id, 'status': row.status, 'message': 'Queued. Provider receipts and device receipt must still be checked.'}
+
+
+@router.get('/reporter/notifications/test/{notification_id}')
+async def test_push_status(notification_id: int, user: User = Depends(get_reporter), session: AsyncSession = Depends(get_session)):
+    row = await session.scalar(select(NotificationOutbox).where(NotificationOutbox.id == notification_id,
+        NotificationOutbox.kind == 'PUSH_SELF_TEST', NotificationOutbox.destination == f'reporter:{user.id}'))
+    if row is None:
+        raise ApplicationError('NOT_FOUND', 'Notification test not found.', 404)
+    await allowed_property(row.property_id, user, session)
+    return {'id': row.id, 'status': row.status, 'sent_at': row.sent_at,
+            'message': 'SENT means provider hand-off confirmed, not that the device displayed it.'}
 
 
 def camera_ids(property_id: int):
@@ -217,7 +259,9 @@ def camera_ids(property_id: int):
 
 @router.get("/reporter/cameras", response_model=list[ReporterCamera])
 async def cameras(property_id: int = Depends(allowed_property), session: AsyncSession = Depends(get_session)):
-    return (await session.scalars(select(Camera).where(Camera.id.in_(camera_ids(property_id))).order_by(Camera.id))).all()
+    records = (await session.scalars(select(Camera).where(Camera.id.in_(camera_ids(property_id))).order_by(Camera.id))).all()
+    states = await camera_states(records, get_settings())
+    return [ReporterCamera(id=c.id, name=c.name, location=c.location, enabled=c.enabled, connection_status=states[c.id]) for c in records]
 
 
 @router.get("/reporter/cameras/{camera_id}", response_model=ReporterCamera)
@@ -225,7 +269,8 @@ async def camera(camera_id: int, property_id: int = Depends(allowed_property), s
     result = await session.scalar(select(Camera).where(Camera.id == camera_id, Camera.id.in_(camera_ids(property_id))))
     if result is None:
         raise ApplicationError("NOT_FOUND", "Camera not found.", 404)
-    return result
+    states = await camera_states([result], get_settings())
+    return ReporterCamera(id=result.id, name=result.name, location=result.location, enabled=result.enabled, connection_status=states[result.id])
 
 
 @router.get("/reporter/events", response_model=ReporterEventPage)
@@ -296,12 +341,25 @@ async def review_event(
 
 
 @router.get("/reporter/summary", response_model=ReporterSummary)
-async def summary(property_id: int = Depends(allowed_property), session: AsyncSession = Depends(get_session)):
+async def summary(property_id: int = Depends(allowed_property), user: User = Depends(get_reporter), session: AsyncSession = Depends(get_session)):
     ids = camera_ids(property_id)
     cameras_count = await session.scalar(select(func.count()).select_from(Camera).where(Camera.id.in_(ids)))
     events_count = await session.scalar(select(func.count()).select_from(SecurityEvent).where(SecurityEvent.camera_id.in_(ids)))
     active_alerts = await session.scalar(select(func.count()).select_from(Alert).where(Alert.camera_id.in_(ids), Alert.status == "ACTIVE"))
-    return ReporterSummary(camera_count=cameras_count or 0, event_count=events_count or 0, active_alert_count=active_alerts or 0)
+    records = (await session.scalars(select(Camera).where(Camera.id.in_(ids)))).all()
+    states = await camera_states(records, get_settings())
+    connected = None if any(s == 'unknown' for s in states.values()) else sum(s == 'online' for s in states.values())
+    active_camera = await session.scalar(select(func.count()).select_from(SecurityEvent).where(
+        SecurityEvent.camera_id.in_(ids), SecurityEvent.status.in_(['OPEN', 'ACKNOWLEDGED']),
+        or_(and_(SecurityEvent.event_type != 'DETECTION', SecurityEvent.severity != 'INFO'),
+            select(Alert.id).where(Alert.security_event_id == SecurityEvent.id, Alert.status == 'CONFIRMED').exists())))
+    active_reports = await session.scalar(select(func.count()).select_from(ReporterIncident).where(
+        ReporterIncident.property_id == property_id, ReporterIncident.reporter_user_id == user.id,
+        ReporterIncident.status.in_(['RECEIVED', 'ACKNOWLEDGED'])))
+    active = (active_camera or 0) + (active_reports or 0)
+    status = 'attention_required' if active or active_alerts else 'camera_issue' if any(s in ('offline', 'disabled') for s in states.values()) else 'no_active_incidents' if records and connected is not None else 'unknown'
+    return ReporterSummary(camera_count=cameras_count or 0, event_count=events_count or 0, active_alert_count=active_alerts or 0,
+        connected_camera_count=connected, active_incident_count=active, security_status=status)
 
 
 async def _owned_incident(
@@ -412,6 +470,9 @@ async def create_reporter_incident(
         action="REPORTER_INCIDENT_CREATED", resource_type="reporter_incident",
         resource_id=str(incident.id), correlation_id=idempotency_key, details={},
     ))
+    session.add(NotificationOutbox(property_id=body.property_id, kind='REPORT_RECEIVED',
+        destination=f'reporter:{user.id}', dedupe_key=f'report:{incident.id}:received',
+        payload={'reporter_incident_id': incident.id, 'status': 'RECEIVED'}))
     await session.commit()
     owned = await _owned_incident(incident.id, user.id, session)
     await get_event_publisher().publish_case(owned.property_id, f"reporter:{owned.id}")

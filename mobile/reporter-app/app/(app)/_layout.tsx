@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
+import { NotificationBridge } from '../../src/components/NotificationBridge';
 export default function AppLayout() {
-  return <Stack screenOptions={{ headerTintColor: '#0f172a', contentStyle: { backgroundColor: '#f8fafc' } }}>
+  return <><NotificationBridge /><Stack screenOptions={{ headerTintColor: '#0f172a', contentStyle: { backgroundColor: '#f8fafc' } }}>
     <Stack.Screen name="index" options={{ title: 'SecurePulse' }} />
     <Stack.Screen name="alerts/index" options={{ title: 'Alerts' }} />
     <Stack.Screen name="alerts/[id]" options={{ title: 'Alert details' }} />
@@ -11,5 +12,5 @@ export default function AppLayout() {
     <Stack.Screen name="report" options={{ title: 'Report incident' }} />
     <Stack.Screen name="incidents/index" options={{ title: 'My reports' }} />
     <Stack.Screen name="incidents/[id]" options={{ title: 'Incident report' }} />
-  </Stack>;
+  </Stack></>;
 }

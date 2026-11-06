@@ -26,6 +26,23 @@ class DispatchService:
         self.repository = DispatchRepository(session)
 
     @staticmethod
+    def _same_source(offer):
+        return (Assignment.security_event_id == offer.security_event_id if offer.security_event_id is not None
+                else Assignment.reporter_incident_id == offer.reporter_incident_id)
+
+    async def _lock_offer_source(self, offer_id):
+        snapshot = await self.session.get(Assignment, offer_id)
+        if snapshot is None:
+            raise ApplicationError('NOT_FOUND', 'Assignment offer not found.', 404)
+        model, source_id = (SecurityEvent, snapshot.security_event_id) if snapshot.security_event_id is not None else (ReporterIncident, snapshot.reporter_incident_id)
+        await self.session.scalar(select(model).where(model.id == source_id).with_for_update())
+
+    async def _other_pending(self, offer):
+        now = datetime.now(timezone.utc)
+        return await self.session.scalar(select(Assignment.id).where(self._same_source(offer),
+            Assignment.id != offer.id, self._capacity_filter(now)).limit(1)) is not None
+
+    @staticmethod
     def _same_offer(
         existing: Assignment,
         *,
@@ -122,6 +139,7 @@ class DispatchService:
         expires_in_seconds: int,
         idempotency_key: str,
         actor_subject: str,
+        broadcast: bool = False,
     ) -> Assignment:
         if (incident_id is None) == (reporter_incident_id is None):
             raise ApplicationError(
@@ -206,7 +224,7 @@ class DispatchService:
             .where(
                 source_filter,
                 Assignment.status.in_(
-                    ["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"]
+                    ["ACCEPTED", "EN_ROUTE", "ON_SCENE"] if broadcast else ["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"]
                 ),
             )
             .with_for_update()
@@ -236,6 +254,7 @@ class DispatchService:
                 MarshalProfile.id == marshal_profile_id,
                 MarshalProfile.property_id == property_id,
                 MarshalProfile.active.is_(True),
+                MarshalProfile.verification_status == 'APPROVED',
                 User.active.is_(True),
                 PropertyMembership.active.is_(True),
                 PropertyMembership.role == "marshal",
@@ -355,6 +374,7 @@ class DispatchService:
         expected_version: int,
         actor_subject: str,
     ) -> Assignment:
+        await self._lock_offer_source(offer_id)
         offer = await self.repository.lock_offer(offer_id)
         if offer is None:
             raise ApplicationError(
@@ -394,6 +414,8 @@ class DispatchService:
             )
 
         if accept:
+            if profile.verification_status != 'APPROVED':
+                raise ApplicationError('ONBOARDING_REQUIRED', 'Complete marshal onboarding and administrator review first.', 403)
             if not profile.active:
                 raise ApplicationError(
                     "MARSHAL_UNAVAILABLE",
@@ -415,6 +437,18 @@ class DispatchService:
                     409,
                 )
 
+        if accept:
+            siblings = (await self.session.scalars(select(Assignment).where(
+                self._same_source(offer), Assignment.id != offer.id,
+                Assignment.status.in_(['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'])
+            ).order_by(Assignment.id).with_for_update())).all()
+            if any(item.status != 'OFFERED' for item in siblings):
+                raise ApplicationError('OFFER_CONFLICT', 'Another marshal has already accepted this incident.', 409)
+            for sibling in siblings:
+                await self.repository.transition(sibling, status='CANCELLED', now=now,
+                    actor_subject='system:first-accept', correlation_id=f'winner:{offer.id}:{sibling.id}',
+                    reason='Another marshal accepted the incident')
+
         transitioned = await self.repository.transition(
             offer,
             status="ACCEPTED" if accept else "DECLINED",
@@ -423,12 +457,12 @@ class DispatchService:
             correlation_id=f"response:{offer.id}:{expected_version}",
         )
 
-        if not accept:
+        if not accept and not await self._other_pending(offer):
             if offer.security_event_id is not None:
                 await self.dispatch_next(
                     incident_id=offer.security_event_id,
                     property_id=offer.property_id,
-                    expires_in_seconds=60,
+                    expires_in_seconds=300,
                     actor_subject="system:reassignment",
                     correlation_id=f"declined:{offer.id}:{offer.version}",
                 )
@@ -446,6 +480,7 @@ class DispatchService:
         offer_id: int,
         actor_subject: str,
     ) -> Assignment:
+        await self._lock_offer_source(offer_id)
         offer = await self.repository.lock_offer(offer_id)
         if offer is None:
             raise ApplicationError(
@@ -481,11 +516,13 @@ class DispatchService:
             reason="deadline elapsed",
         )
 
+        if await self._other_pending(offer):
+            return result
         if offer.security_event_id is not None:
             await self.dispatch_next(
                 incident_id=offer.security_event_id,
                 property_id=offer.property_id,
-                expires_in_seconds=60,
+                expires_in_seconds=300,
                 actor_subject="system:reassignment",
                 correlation_id=f"expired:{offer.id}:{offer.version}",
             )

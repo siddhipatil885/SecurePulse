@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "SecurePulse Marshal",
+    "slug": "securepulse-marshal",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "securepulse-marshal",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.securepulse.marshal",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SecurePulse uses your location while you are responding to an active assignment."
+      }
+    },
+    "android": {
+      "package": "com.securepulse.marshal",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "SecurePulse uses your location while you are responding to an active assignment."
+        }
+      ],
+      "expo-asset",
+      ["expo-image-picker", {
+        "photosPermission": "Choose your profile and government ID photos for private administrator review.",
+        "cameraPermission": "Take a clear face photo for your marshal onboarding.",
+        "microphonePermission": false
+      }]
+    ]
+  }
+}

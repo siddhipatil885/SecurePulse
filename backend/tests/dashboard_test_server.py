@@ -46,7 +46,7 @@ async def lifespan(app):
             session.add_all([PropertyMembership(user_id=1, property_id=id, role="owner") for id in (1, 2)])
             session.add(PropertyMembership(user_id=2, property_id=1, role="reporter"))
             session.add(PropertyMembership(user_id=3, property_id=1, role="marshal"))
-            session.add(MarshalProfile(id=1, user_id=3, property_id=1, capacity=1, service_area="North"))
+            session.add(MarshalProfile(id=1, user_id=3, property_id=1, capacity=1, service_area="North", verification_status="APPROVED"))
             await session.flush()
             session.add(MarshalAvailability(marshal_profile_id=1, on_duty=True, available=True, updated_at=datetime.now(timezone.utc)))
             for id, label in [(1, "NORTH_INTRUSION"), (2, "SOUTH_LOITERING"), (3, "PRIVATE_INCIDENT")]:

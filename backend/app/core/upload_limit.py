@@ -13,9 +13,10 @@ class EvidenceUploadLimitMiddleware:
 
     async def __call__(self, scope, receive, send):
         if (scope['type'] != 'http' or scope.get('method') != 'POST'
-                or not re.fullmatch(r'/api/v1/reporter/incidents/[1-9][0-9]*/evidence/?', scope.get('path', ''))):
+                or not re.fullmatch(r'/api/v1/(reporter/incidents/[1-9][0-9]*/evidence|marshal/onboarding)/?', scope.get('path', ''))):
             return await self.app(scope, receive, send)
-        limit = get_settings().reporter_evidence_max_bytes + 65536
+        limit = (9_000_000 if scope.get('path', '').rstrip('/').endswith('/marshal/onboarding')
+                 else get_settings().reporter_evidence_max_bytes) + 65536
         headers = dict(scope.get('headers', []))
         try:
             length = int(headers.get(b'content-length', b'0'))

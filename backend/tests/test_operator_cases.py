@@ -61,7 +61,7 @@ async def site(monkeypatch, tmp_path):
             session.add(ReporterIncident(id=id, reporter_user_id=2 if id == 1 else 1, property_id=id,
                 incident_type="THEFT", description=f"Manual report {id}", address=f"Street {id}", latitude=19.0,
                 longitude=72.0, location_accuracy=5.0, status="RECEIVED", idempotency_key=f"manual-report-{id}", created_at=now))
-            session.add(MarshalProfile(id=id, user_id=4 if id == 1 else 5, property_id=id, capacity=1, service_area=f"Area {id}"))
+            session.add(MarshalProfile(id=id, user_id=4 if id == 1 else 5, property_id=id, capacity=1, service_area=f"Area {id}", verification_status='APPROVED'))
         await session.flush()
         for id in (1, 2):
             session.add(MarshalAvailability(marshal_profile_id=id, on_duty=True, available=True, updated_at=now))
@@ -259,7 +259,7 @@ async def test_private_file_paths_are_never_exposed_or_allowed_to_escape_storage
 async def test_database_prevents_duplicate_active_manual_offers_and_invalid_sources(site):
     _, factory = site
     async with factory() as session:
-        first = Assignment(property_id=1, reporter_incident_id=1, marshal_profile_id=1, status="OFFERED",
+        first = Assignment(property_id=1, reporter_incident_id=1, marshal_profile_id=1, status="ACCEPTED",
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=60), idempotency_key="database-first-offer")
         session.add(first)
         await session.commit()

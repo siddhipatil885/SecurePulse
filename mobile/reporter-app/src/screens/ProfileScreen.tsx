@@ -11,6 +11,7 @@ export function ProfileScreen() {
   const [name, setName] = useState(state.profile?.name ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   async function saveName() {
@@ -20,8 +21,9 @@ export function ProfileScreen() {
     finally { setBusy(false); }
   }
   async function savePassword() {
+    if (newPassword !== confirmation) { setMessage('New passwords do not match.'); return; }
     setBusy(true); setMessage(null);
-    try { await api.changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); session.passwordChanged(); }
+    try { await api.changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); setConfirmation(''); session.passwordChanged(); }
     catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to change password.'); }
     finally { setBusy(false); }
   }
@@ -32,6 +34,8 @@ export function ProfileScreen() {
     <Text style={ui.heading}>Change password</Text>
     <TextInput accessibilityLabel="Current password" style={ui.input} value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry editable={!busy} />
     <TextInput accessibilityLabel="New password" style={ui.input} value={newPassword} onChangeText={setNewPassword} secureTextEntry maxLength={128} editable={!busy} />
+    <Notice>Use at least 12 characters for your new password.</Notice>
+    <TextInput accessibilityLabel="Confirm new password" style={ui.input} value={confirmation} onChangeText={setConfirmation} secureTextEntry maxLength={128} editable={!busy} />
     <PrimaryButton label={busy ? 'Saving…' : 'Change password'} onPress={() => void savePassword()} disabled={busy || !currentPassword || newPassword.length < 12} />
     {message && <Text accessibilityRole="alert" style={ui.error}>{message}</Text>}
     <Text style={ui.heading}>Property access</Text>

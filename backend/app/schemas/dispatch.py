@@ -8,7 +8,7 @@ class OfferCreate(BaseModel):
     reporter_incident_id: int | None = Field(default=None, gt=0)
     property_id: int = Field(gt=0)
     marshal_profile_id: int = Field(gt=0)
-    expires_in_seconds: int = Field(default=60, ge=10, le=3600)
+    expires_in_seconds: int = Field(default=300, ge=10, le=300)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
     @model_validator(mode="after")
@@ -22,9 +22,26 @@ class OfferResponse(BaseModel):
     expected_version: int = Field(gt=0)
 
 
+class BroadcastOffer(OfferCreate):
+    marshal_profile_id: int | None = None
+    marshal_profile_ids: list[int] = Field(min_length=1, max_length=20)
+
+
 class AssignmentProgress(BaseModel):
     expected_version: int = Field(gt=0)
     status: Literal["EN_ROUTE", "ON_SCENE", "COMPLETED"]
+
+
+class ResponderLocation(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy_m: float | None = None
+    heading: float | None = None
+    speed_mps: float | None = None
+    updated_at: datetime
+    distance_m: float | None = None
+    eta_seconds: int | None = None
+    eta_source: Literal["gps_speed", "urban_fallback"] | None = None
 
 
 class OfferView(BaseModel):
@@ -40,6 +57,7 @@ class OfferView(BaseModel):
     accepted_at: datetime | None
     closed_at: datetime | None
     version: int
+    responder_location: ResponderLocation | None = None
 
 
 class EligibleMarshal(BaseModel):
@@ -48,6 +66,7 @@ class EligibleMarshal(BaseModel):
     user_id: int
     service_area: str | None
     capacity: int
+    name: str | None = None
 
 
 class AvailabilityUpdate(BaseModel):
@@ -58,7 +77,7 @@ class AvailabilityUpdate(BaseModel):
 
 class DispatchRequest(BaseModel):
     property_id: int = Field(gt=0)
-    expires_in_seconds: int = Field(default=60, ge=10, le=3600)
+    expires_in_seconds: int = Field(default=300, ge=10, le=300)
     correlation_id: str = Field(min_length=8, max_length=255)
 
 

@@ -19,7 +19,10 @@ export function normalizeError(error: unknown): ApiError {
     if (status === 403) return new ApiError('You do not have permission to view this information.', status);
     if (status === 404) return new ApiError('This resource is unavailable. It may have been removed.', status);
     if (status === 422) return new ApiError('Check the information you entered and try again.', status);
-    if (status && status >= 500) return new ApiError('The service is unavailable. Please try again later.', status);
+    if (status && status >= 500) {
+      if (['PUSH_NOT_CONFIGURED', 'RECOVERY_NOT_CONFIGURED', 'AUTH_CONFIGURATION_ERROR', 'AUTH_DELIVERY_UNAVAILABLE', 'LIVE_UNAVAILABLE'].includes(body?.error?.code) && typeof body?.error?.message === 'string') return new ApiError(body.error.message, status, body.error.code);
+      return new ApiError('The service is unavailable. Please try again later.', status);
+    }
     if (!error.response) return new ApiError(error.code === 'ECONNABORTED' ? 'The request timed out. Please retry.' : 'Unable to reach the server. Check your connection.', undefined, 'NETWORK');
     return new ApiError(typeof body?.error?.message === 'string' ? body.error.message : 'The request could not be completed.', status);
   }
@@ -42,6 +45,14 @@ export function createApi(baseUrl: string | null, getToken: () => string | null,
     }
   }
   return {
+    eligibleMarshals: (property: number) => request('dispatch/eligible-marshals', z.array(z.object({ id: z.number(), user_id: z.number(), name: z.string().nullable(), service_area: z.string().nullable(), capacity: z.number() })), { params: { property_id: property } }),
+    assignment: (property: number, source: 'camera' | 'reporter', id: number) => request('dispatch/assignment', z.object({ id: z.number(), marshal_profile_id: z.number(), status: z.string(), version: z.number(), expires_at: z.string() }).nullable(), { params: { property_id: property, [source === 'camera' ? 'incident_id' : 'reporter_incident_id']: id } }),
+    assignMarshal: (property: number, source: 'camera' | 'reporter', id: number, marshal: number, key: string) => request('dispatch/offers', z.object({ id: z.number(), status: z.string() }), { body: { property_id: property, [source === 'camera' ? 'incident_id' : 'reporter_incident_id']: id, marshal_profile_id: marshal, expires_in_seconds: 300, idempotency_key: key } }),
+    assignMarshals: (property: number, source: 'camera' | 'reporter', id: number, marshals: number[], key: string) => request('dispatch/offers/broadcast', z.array(z.object({ id: z.number(), status: z.string() })), { body: { property_id: property, [source === 'camera' ? 'incident_id' : 'reporter_incident_id']: id, marshal_profile_ids: marshals, expires_in_seconds: 300, idempotency_key: key } }),
+    requestRecovery: (email: string, purpose: 'password' | 'verification') => request('auth/recovery/request', z.object({ message: z.string() }), { public: true, body: { email, purpose } }),
+    verifyEmail: (email: string, code: string) => request('auth/recovery/verify', z.object({ message: z.string() }), { public: true, body: { email, code } }),
+    resetPassword: (email: string, code: string, new_password: string) => request('auth/recovery/reset', z.object({ message: z.string() }), { public: true, body: { email, code, new_password } }),
+    liveCamera: (property: number, id: number) => request(`reporter/cameras/${id}/live/access`, z.object({ url: z.string(), expires_at: z.string() }), { method: 'POST', params: { property_id: property } }),
     login: (email: string, password: string) => request('auth/login', tokenSchema, { public: true, body: { email: email.trim().toLowerCase(), password } }),
     profile: (token?: string, signal?: AbortSignal) => request('auth/me', profileSchema, { token, signal }),
     updateProfile: (name: string) => request<Profile>('auth/profile', profileSchema, { method: 'PUT', body: { name } }),
@@ -75,6 +86,8 @@ export function createApi(baseUrl: string | null, getToken: () => string | null,
       request('reporter/devices/' + encodeURIComponent(deviceId), z.unknown(), { method: 'DELETE' }),
     notificationPreferences: () =>
       request('reporter/notification-preferences', z.array(notificationPreferenceSchema)),
+    testNotification: (property: number) => request('reporter/notifications/test', z.object({ id: z.number(), status: z.string(), message: z.string() }), { method: 'POST', params: { property_id: property } }),
+    notificationTestStatus: (id: number) => request(`reporter/notifications/test/${id}`, z.object({ id: z.number(), status: z.string(), message: z.string() })),
     updateNotificationPreference: (category: string, enabled: boolean) =>
       request('reporter/notification-preferences', notificationPreferenceSchema, {
         method: 'PUT', body: { category, enabled }, headers: { 'Content-Type': 'application/json' },

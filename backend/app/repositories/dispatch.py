@@ -176,6 +176,7 @@ class DispatchRepository:
             .where(
                 MarshalProfile.property_id == property_id,
                 MarshalProfile.active.is_(True),
+                MarshalProfile.verification_status == 'APPROVED',
                 User.active.is_(True),
                 PropertyMembership.active.is_(True),
                 PropertyMembership.role == "marshal",
@@ -393,24 +394,29 @@ class OutboxRepository:
         worker_id: str,
         now: datetime,
         limit: int = 50,
+        destination_prefixes: tuple[str, ...] | None = None,
     ) -> list[NotificationOutbox]:
-        statement = (
-            select(NotificationOutbox)
-            .where(
-                or_(
-                    NotificationOutbox.status.in_(["PENDING", "FAILED"]),
-                    and_(
-                        NotificationOutbox.status == "PROCESSING",
-                        NotificationOutbox.claimed_at
-                        < now - timedelta(minutes=5),
-                    ),
+        destination_filter = None
+        if destination_prefixes:
+            destination_filter = or_(*[
+                NotificationOutbox.destination.startswith(prefix)
+                for prefix in destination_prefixes
+            ])
+        statement = select(NotificationOutbox).where(
+            or_(
+                NotificationOutbox.status.in_(["PENDING", "FAILED"]),
+                and_(
+                    NotificationOutbox.status == "PROCESSING",
+                    NotificationOutbox.claimed_at < now - timedelta(minutes=5),
                 ),
-                NotificationOutbox.available_at <= now,
-            )
-            .order_by(NotificationOutbox.id)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
+            ),
+            NotificationOutbox.available_at <= now,
         )
+        if destination_filter is not None:
+            statement = statement.where(destination_filter)
+        statement = statement.order_by(NotificationOutbox.id)
+        statement = statement.limit(limit)
+        statement = statement.with_for_update(skip_locked=True)
         rows = list((await self.session.scalars(statement)).all())
 
         for row in rows:

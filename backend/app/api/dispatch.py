@@ -1,14 +1,15 @@
 """Authenticated, property-scoped dispatch orchestration endpoints."""
 from datetime import datetime, timedelta, timezone
+import hashlib
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import case, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_session, get_event_publisher
 from app.core.exceptions import ApplicationError
 from app.core.reporter_auth import get_reporter
-from app.models import MarshalAvailability, MarshalProfile, Property, PropertyMembership, User
+from app.models import Assignment, MarshalAvailability, MarshalProfile, Property, PropertyMembership, ReporterIncident, SecurityEvent, User
 from app.repositories.dispatch import DispatchRepository
-from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, DispatchOutcome,
+from app.schemas.dispatch import (AssignmentProgress, AvailabilityUpdate, BroadcastOffer, DispatchOutcome,
     DispatchRequest, EligibleMarshal, OfferCreate, OfferResponse, OfferView)
 from app.services.dispatch_service import DispatchService
 
@@ -34,8 +35,28 @@ async def require_role(session: AsyncSession, user_id: int, property_id: int,
 async def eligible_marshals(property_id: int = Query(ge=1), user: User = Depends(get_reporter),
                              session: AsyncSession = Depends(get_session)):
     await require_role(session, user.id, property_id, {"owner", "dispatcher"})
-    return await DispatchRepository(session).eligible_marshals(
+    profiles = await DispatchRepository(session).eligible_marshals(
         property_id, datetime.now(timezone.utc) - timedelta(minutes=5))
+    users = {item.id: item for item in (await session.scalars(select(User).where(User.id.in_([p.user_id for p in profiles])))).all()}
+    return [EligibleMarshal(id=p.id, user_id=p.user_id, service_area=p.service_area,
+                            capacity=p.capacity, name=users[p.user_id].display_name) for p in profiles]
+
+
+@router.get('/assignment', response_model=OfferView | None)
+async def current_assignment(property_id: int = Query(ge=1), incident_id: int | None = Query(None, ge=1),
+                             reporter_incident_id: int | None = Query(None, ge=1),
+                             user: User = Depends(get_reporter), session: AsyncSession = Depends(get_session)):
+    await require_role(session, user.id, property_id, {'owner', 'dispatcher'})
+    if (incident_id is None) == (reporter_incident_id is None):
+        raise ApplicationError('INVALID_INCIDENT_SOURCE', 'Provide exactly one incident source.', 422)
+    model, source_id = (SecurityEvent, incident_id) if incident_id is not None else (ReporterIncident, reporter_incident_id)
+    if await session.scalar(select(model.id).where(model.id == source_id, model.property_id == property_id)) is None:
+        raise ApplicationError('NOT_FOUND', 'Incident not found.', 404)
+    source_filter = Assignment.security_event_id == incident_id if incident_id is not None else Assignment.reporter_incident_id == reporter_incident_id
+    return await session.scalar(select(Assignment).where(Assignment.property_id == property_id, source_filter)
+                                .order_by(case((Assignment.status.in_(['ACCEPTED', 'EN_ROUTE', 'ON_SCENE']), 0),
+                                               (Assignment.status == 'OFFERED', 1), else_=2),
+                                          Assignment.offered_at.desc(), Assignment.id.desc()).limit(1))
 
 
 @router.put("/marshal/availability", response_model=EligibleMarshal)
@@ -46,6 +67,8 @@ async def update_availability(body: AvailabilityUpdate, user: User = Depends(get
         MarshalProfile.property_id == body.property_id).with_for_update())
     if profile is None:
         raise ApplicationError("FORBIDDEN", "No marshal profile exists for this property.", 403)
+    if (body.on_duty or body.available) and profile.verification_status != 'APPROVED':
+        raise ApplicationError('ONBOARDING_REQUIRED', 'Complete onboarding and administrator review before going on duty.', 403)
     availability = await session.get(MarshalAvailability, profile.id, with_for_update=True)
     if availability is None:
         availability = MarshalAvailability(marshal_profile_id=profile.id)
@@ -68,6 +91,36 @@ async def create_offer(body: OfferCreate, user: User = Depends(get_reporter),
     await session.commit()
     await publish_assignment_update(offer)
     return offer
+
+
+@router.post('/offers/broadcast', response_model=list[OfferView], status_code=201)
+async def broadcast_offers(body: BroadcastOffer, user: User = Depends(get_reporter),
+                           session: AsyncSession = Depends(get_session)):
+    await require_role(session, user.id, body.property_id, {'owner', 'dispatcher'})
+    if session.bind.dialect.name == 'sqlite':
+        # sqlite3 legacy transaction mode otherwise lets the first SAVEPOINT
+        # commit independently, breaking all-or-nothing batch creation.
+        await session.execute(text('BEGIN'))
+    await session.scalar(select(Property).where(Property.id == body.property_id).with_for_update())
+    ids = sorted(set(body.marshal_profile_ids))
+    if any(value <= 0 for value in ids):
+        raise ApplicationError('INVALID_MARSHAL', 'Select valid responders.', 422)
+    # Bind the entire selected set to the request key; all offers commit together.
+    fingerprint = hashlib.sha256(f'{body.property_id}:{body.incident_id}:{body.reporter_incident_id}:{ids}:{body.expires_in_seconds}'.encode()).hexdigest()[:20]
+    prefix = 'broadcast:' + hashlib.sha256(f'{user.id}:{body.property_id}:{body.idempotency_key}'.encode()).hexdigest()[:32]
+    existing = (await session.scalars(select(Assignment).where(Assignment.idempotency_key.like(prefix + ':%')))).all()
+    if existing and any(f':{fingerprint}:' not in item.idempotency_key for item in existing):
+        raise ApplicationError('IDEMPOTENCY_CONFLICT', 'This request key belongs to another selection.', 409)
+    service = DispatchService(session)
+    offers = []
+    for profile_id in ids:
+        offers.append(await service.create_offer(incident_id=body.incident_id, reporter_incident_id=body.reporter_incident_id,
+            property_id=body.property_id, marshal_profile_id=profile_id, expires_in_seconds=body.expires_in_seconds,
+            idempotency_key=f'{prefix}:{fingerprint}:{profile_id}', actor_subject=f'reporter:{user.id}', broadcast=True))
+    await session.commit()
+    for offer in offers:
+        await publish_assignment_update(offer)
+    return offers
 
 
 @router.post("/incidents/{incident_id}/dispatch", response_model=DispatchOutcome)
@@ -123,7 +176,7 @@ async def update_progress(offer_id: int, body: AssignmentProgress,
 async def _dispatcher_offer(offer_id: int, property_id: int, user: User,
                             session: AsyncSession):
     await require_role(session, user.id, property_id, {"owner", "dispatcher"})
-    offer = await DispatchRepository(session).lock_offer(offer_id)
+    offer = await session.scalar(select(Assignment).where(Assignment.id == offer_id))
     if offer is None or offer.property_id != property_id:
         raise ApplicationError("NOT_FOUND", "Assignment offer not found.", 404)
     return offer

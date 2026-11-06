@@ -149,3 +149,44 @@ class NotificationDispatcher:
                 )
 
         return len(jobs)
+
+
+class ExternalAlertDispatcher(NotificationDispatcher):
+    """Dispatch only explicitly addressed external channels."""
+
+    def __init__(self, session_factory, provider, worker_id: str = "external-alerts"):
+        super().__init__(session_factory, provider, worker_id)
+
+    async def run_once(self, limit: int = 50) -> int:
+        now = datetime.now(timezone.utc)
+        async with self.session_factory() as session, session.begin():
+            claimed = await OutboxRepository(session).claim_batch(
+                self.worker_id,
+                now,
+                limit,
+                destination_prefixes=("sms:", "voice:", "whatsapp:", "emergency:"),
+            )
+            jobs = [
+                (row.id, row.destination or "", row.kind, row.payload, row.dedupe_key)
+                for row in claimed
+            ]
+        return await self._deliver_jobs(jobs)
+
+    async def _deliver_jobs(self, jobs):
+        for outbox_id, destination, event_type, payload, key in jobs:
+            try:
+                result = await self.provider.deliver(destination, event_type, payload, key)
+            except Exception as error:
+                logger.exception("External alert provider failed", extra={"outbox_id": outbox_id})
+                result = DeliveryResult(delivered=False, error=type(error).__name__)
+            async with self.session_factory() as session, session.begin():
+                await OutboxRepository(session).record_attempt(
+                    outbox_id,
+                    provider=self.provider.name,
+                    result="DELIVERED" if result.delivered else "FAILED",
+                    now=datetime.now(timezone.utc),
+                    provider_reference=result.provider_message_id,
+                    error=result.error,
+                    response_metadata=result.metadata,
+                )
+        return len(jobs)

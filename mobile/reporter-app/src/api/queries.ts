@@ -1,9 +1,10 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, useAuth } from '../auth/AuthProvider';
 import type { Camera, ReporterIncident, SecurityEvent } from './types';
 export function useCameras() {
   const { propertyId, state } = useAuth();
   return useQuery({ queryKey: ['cameras', state.profile?.id, propertyId], enabled: propertyId !== null && !!state.profile,
+    refetchInterval: 15000,
     queryFn: ({ signal }) => api.cameras(propertyId!, signal) });
 }
 export function useEvents() {
@@ -15,6 +16,7 @@ export function useEvents() {
 export function useSummary() {
   const { propertyId, state } = useAuth();
   return useQuery({ queryKey: ['summary', state.profile?.id, propertyId], enabled: propertyId !== null && !!state.profile,
+    refetchInterval: 15000,
     queryFn: ({ signal }) => api.summary(propertyId!, signal) });
 }
 export function useDetail(kind: 'camera' | 'event', id: number) {
@@ -23,10 +25,16 @@ export function useDetail(kind: 'camera' | 'event', id: number) {
     queryFn: ({ signal }) => kind === 'camera' ? api.camera(propertyId!, id, signal) : api.event(propertyId!, id, signal) });
 }
 export function useReviewEvent() {
-  const { propertyId } = useAuth();
+  const { propertyId, state } = useAuth();
+  const client = useQueryClient();
   return async (id: number, decision: 'CONFIRMED' | 'FALSE_ALARM') => {
     if (propertyId === null) throw new Error('Select a property before reviewing an alert.');
-    return api.reviewEvent(propertyId, id, decision);
+    const result = await api.reviewEvent(propertyId, id, decision);
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ['events', state.profile?.id, propertyId] }),
+      client.invalidateQueries({ queryKey: ['summary', state.profile?.id, propertyId] }),
+    ]);
+    return result;
   };
 }
 export function useIncidents(filters: { status?: string; incident_type?: string; has_active_assignment?: 'true' } = {}) {

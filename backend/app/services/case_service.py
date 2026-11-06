@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ApplicationError
 from app.models import (Assignment, AssignmentEvent, AuditRecord, Camera, Evidence,
     IncidentStatusHistory, NotificationOutbox, Property, ReporterIncident,
-    ReporterIncidentEvidence, ReporterIncidentTimeline, SecurityEvent)
+    ReporterIncidentEvidence, ReporterIncidentTimeline, SecurityEvent, MarshalAvailability)
 from app.schemas.case import (CaseCommand, CaseDetail, CaseEvidence, CaseEvidencePage,
     CaseLocation, CasePage, CaseSummary, CaseTimelineItem, CaseTimelinePage)
-from app.schemas.dispatch import OfferView
+from app.schemas.dispatch import OfferView, ResponderLocation
+from app.services.location import distance_metres, estimate_eta_seconds, MIN_MOVING_SPEED_MPS
 
 ACTIVE_ASSIGNMENTS = ("OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE")
 TRANSITIONS = {
@@ -64,6 +65,31 @@ class CaseService:
             Assignment.property_id == property_id, assignment_filter(source, source_id))
             .order_by(Assignment.offered_at.desc(), Assignment.id.desc()).limit(1))
         summary = self.summary(item, source, assignment)
+        destination_latitude = getattr(item, "latitude", None)
+        destination_longitude = getattr(item, "longitude", None)
+        if assignment and assignment.status in ACTIVE_ASSIGNMENTS:
+            availability = await self.session.get(MarshalAvailability, assignment.marshal_profile_id)
+            if availability and availability.location_updated_at and availability.latitude is not None and availability.longitude is not None:
+                eta_fields = {}
+                if destination_latitude is not None and destination_longitude is not None:
+                    distance = distance_metres(
+                        availability.latitude, availability.longitude,
+                        destination_latitude, destination_longitude,
+                    )
+                    eta_fields = {
+                        "distance_m": round(distance, 1),
+                        "eta_seconds": estimate_eta_seconds(distance, availability.location_speed_mps),
+                        "eta_source": "gps_speed" if availability.location_speed_mps is not None and availability.location_speed_mps >= MIN_MOVING_SPEED_MPS else "urban_fallback",
+                    }
+                summary.latest_assignment.responder_location = ResponderLocation(
+                    latitude=availability.latitude,
+                    longitude=availability.longitude,
+                    accuracy_m=availability.location_accuracy_m,
+                    heading=availability.location_heading,
+                    speed_mps=availability.location_speed_mps,
+                    updated_at=availability.location_updated_at,
+                    **eta_fields,
+                )
         if source == "camera":
             camera = await self.session.get(Camera, item.camera_id)
             property = await self.session.get(Property, property_id)
