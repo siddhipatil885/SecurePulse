@@ -1,9 +1,10 @@
 # SecurePulse Reporter
 
 Live camera playback, current camera health/counts, Managed Auth email-code
-recovery and the Expo push sender/receipts/tap flow are implemented. Use
-[the reporter completion runbook](../../docs/runbooks/reporter-completion.md)
-for native build setup and the actual host/device acceptance still required.
+recovery and the Expo push sender/receipts/tap flow are implemented. Physical
+device acceptance is still required. For remote push, configure an actual EAS
+project ID, platform push credentials and the backend Expo notification provider,
+then build the development profile in `eas.json` and run `npm start -- --dev-client`.
 
 Native Expo SDK 58 / React Native / TypeScript app in this directory. Install and run commands here, not at the repository root.
 
