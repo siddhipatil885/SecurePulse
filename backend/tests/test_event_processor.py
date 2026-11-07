@@ -309,6 +309,26 @@ async def test_update_escalates_same_zone_incident_without_creating_duplicate() 
 
 
 @pytest.mark.asyncio
+async def test_escalation_queues_one_external_alert_per_destination():
+    engine = AsyncMock()
+    engine.evaluate.side_effect = [SecurityDecision(event_type='LOITERING', score=score,
+        severity=severity, reason='Test escalation', metadata={'zone_id': 'loading'})
+        for severity, score in [('MEDIUM', 55), ('HIGH', 75), ('CRITICAL', 95), ('CRITICAL', 95)]]
+    processor, session, _, repository = make_processor(security_engine=engine)
+    processor.alert_routing_destinations = ('sms:+15550010', 'emergency:police', 'sms:+15550010')
+    session.scalar.return_value = None
+    opened = await processor.process(make_detection())
+    repository.get_by_frigate_event_id.return_value = opened.event
+    repository.get_by_incident_key.return_value = opened.event
+    for revision in range(1, 4):
+        await processor.process(make_detection(metadata={'lifecycle': 'update', 'revision': revision}))
+    alerts = [call.args[0] for call in session.add.call_args_list
+        if isinstance(call.args[0], NotificationOutbox) and call.args[0].kind == 'INCIDENT_EXTERNAL_ALERT']
+    assert {row.destination for row in alerts} == {'sms:+15550010', 'emergency:police'}
+    assert len(alerts) == len({row.dedupe_key for row in alerts}) == 2
+
+
+@pytest.mark.asyncio
 async def test_processor_stores_unclassified_when_engine_fails() -> None:
     security_engine = AsyncMock()
     security_engine.evaluate.side_effect = SecurityEngineError("timeout")

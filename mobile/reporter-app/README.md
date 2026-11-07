@@ -1,12 +1,18 @@
 # SecurePulse Reporter
 
-Native Expo SDK 53 / React Native / TypeScript app in this directory. Install and run commands here, not at the repository root.
+Live camera playback, current camera health/counts, Managed Auth email-code
+recovery and the Expo push sender/receipts/tap flow are implemented. Physical
+device acceptance is still required. For remote push, configure an actual EAS
+project ID, platform push credentials and the backend Expo notification provider,
+then build the development profile in `eas.json` and run `npm start -- --dev-client`.
+
+Native Expo SDK 58 / React Native / TypeScript app in this directory. Install and run commands here, not at the repository root.
 
 ## Mobile setup
 
-1. Use Node 20.19+ and run `npm ci`.
+1. Use Node 24.3+ (24 LTS recommended) and run `npm ci`.
 2. Copy `.env.example` to `.env` and set `EXPO_PUBLIC_SERVER_URL` to the existing FastAPI server's LAN address or deployed HTTPS URL. Include any reverse-proxy prefix, but not `/api/v1`.
-3. Run `npm start`, then open an SDK 53-compatible Expo Go installation or development build. Use `npm run android` / `npm run ios` for an available emulator/simulator.
+3. Run `npm start -- --go`, then open an SDK 58-compatible Expo Go installation. Use `npm run android` / `npm run ios` for an available emulator/simulator. Remote push requires a configured development or release build; notification modules are loaded only in supported builds so Expo Go can still open the app.
 4. Sign in with an administrator-provisioned account after completing the backend setup below.
 
 There is no default server and loopback addresses are rejected. On a physical device, use the machine's actual LAN IP; both devices must be able to reach it. Android emulator users can use `http://10.0.2.2:8000`. A Metro tunnel does not tunnel FastAPI. Restart Metro after changing environment variables.
@@ -26,7 +32,7 @@ python -m pip install -r requirements.txt
 python -m alembic upgrade head
 ```
 
-Apply migrations through `0017_reporter_active_assignment` before using the integrated workflow. No production migration or account provisioning was performed during implementation. Review/back up existing data according to your normal deployment process.
+Apply migrations through `0020_marshal_onboarding` before using the integrated workflow. This requires marshals to complete onboarding and receive approval before going on duty. Review/back up existing data according to your normal deployment process.
 
 Configure `AUTH_ENABLED=true`, a strong `JWT_SECRET` of at least 32 characters, and optionally `JWT_ISSUER`. Sign-in refuses anonymous development mode. The dashboard uses its own HTTP-only cookie session; mobile bearer credentials cannot access legacy global operator APIs. Owners can register an account and property in the dashboard, then sign in to the mobile app with the same credentials. Additional reporter memberships can be provisioned below.
 
@@ -42,7 +48,7 @@ The password is requested interactively with confirmation (12–128 characters).
 python -m app.provision_reporter --email reporter@your-domain.example --name "Reporter" --role reporter --property-id 1
 ```
 
-Existing accounts are never overwritten, camera assignments to other properties are rejected, and the transaction rolls back on failure. A camera belongs to at most one property. Unassigned cameras are excluded from reporter reads. Owner and reporter membership both permit reviewing their property's data. Reporter-created incidents can expose verified assignment status after migration `0014_reporter_dispatch_link`; the app never assigns or impersonates marshals.
+Existing accounts are never overwritten, camera assignments to other properties are rejected, and the transaction rolls back on failure. A camera belongs to at most one property. Unassigned cameras are excluded from reporter reads. Owner and reporter membership both permit reviewing their property's data. Owners can offer an incident to several eligible marshals with a five-minute deadline; the first acceptance closes the other offers. Reporter memberships cannot assign marshals.
 
 ## API contract
 
@@ -70,16 +76,20 @@ Passwords use salted scrypt hashes. Five failed attempts lock an account for 15 
 - TanStack Query caches only in memory for five minutes, treats data as stale after 30 seconds, and refetches on foreground/reconnection. Cache keys include user and property; logout cancels requests and clears private data.
 - Offline startup cannot unlock saved data before the server validates the session. A saved token can be retried through “Restore saved session.”
 - Home uses actual property names and server counts. ACTIVE operator alerts are distinct from confirmed incidents. Camera `enabled` does not mean connected.
-- Connection health, property security status and confirmed incident counts remain unavailable because no authoritative backend source exists.
+- Camera health comes from a short-lived Frigate stats projection. Open incident
+  counts use scoped SQL records; unavailable health stays explicitly unverified.
 - Alerts display recorded event type, camera, timestamp, severity and status. List pagination and details use real responses.
 - Active alerts can be confirmed or dismissed once by an authorized property member.
-- Active backend alerts can now be confirmed or dismissed once per authorized property member; live camera playback remains unavailable in the mobile client.
+- Live HLS/fMP4 camera playback uses signed, resource-scoped URLs through the
+  authorized backend; host reachability and actual camera codecs require device acceptance.
 - Manual incident submission requires private writable evidence storage. Creation and upload retries retain their idempotency keys; a failed attachment does not create another report. History supports status and active-assignment filters. Active details poll every 10 seconds and support pull to refresh.
 - Phase 7 history and accessibility work is documented in [the Phase 7 report](docs/mobile/phase-7-history-accessibility.md).
 - Evidence uses short-lived audited grants plus the current bearer session. Images and MP4 video have on-demand native previews; failed/expired access can be refreshed. The backend accepts JPG, PNG and MP4 up to its configured limit (10 MB by default).
 - Phase 9 exposes all server-backed notification categories in Settings. See [the Phase 9 report](docs/mobile/phase-9-notification-preferences.md).
 - Phase 10 adds reporter name updates and secure password rotation. See [the Phase 10 report](docs/mobile/phase-10-account-self-service.md).
-- Notification preferences and Expo device registration are implemented behind migration `0015_reporter_notifications`; provider delivery and physical-device verification remain pending. See [the Phase 5 report](docs/mobile/phase-5-notifications.md).
+- Notification preferences and device registration use migration `0015`. The real
+  Expo sender, tickets/receipts and retries are implemented. Deployment activation,
+  platform credentials and physical receipt verification remain pending.
 - No media streams, simulated events, mock production data, Frigate credentials, or marshal-facing client are included. Dispatch status is shown only when the existing server-side assignment state machine has a real assignment.
 
 ## Checks

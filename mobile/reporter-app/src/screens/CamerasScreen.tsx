@@ -16,7 +16,7 @@ export function CamerasScreen() {
     {!cameras.isError && cameras.data?.map(camera => <View key={camera.id} style={ui.card}>
       <Text style={ui.heading}>{camera.name}</Text>
       <Notice>{camera.location ?? 'No location provided'}</Notice>
-      <Notice>{camera.enabled ? 'Enabled' : 'Disabled'} · Connection unverified</Notice>
+      <Notice>{camera.enabled ? 'Enabled' : 'Disabled'} · {camera.connection_status === 'unknown' ? 'Health unverified' : camera.connection_status}</Notice>
       <PrimaryButton variant="secondary" label="Camera details" onPress={() => router.push({ pathname: '/cameras/[id]', params: { id: camera.id } })} />
     </View>)}
   </Screen>;

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Protocol
+from typing import Protocol, Callable, Awaitable
 
 from app.models.security_event import SecurityEvent
 from app.schemas.event import EventResponse
@@ -16,6 +16,9 @@ class EventPublisher(Protocol):
         self, camera_id: str, tracks: list[dict[str, object]], property_id: int | None = None
     ) -> None: ...
     async def publish_case(self, property_id: int, key: str) -> None: ...
+    async def publish_marshal_location(
+        self, property_id: int, assignment_id: int, location: dict[str, object]
+    ) -> None: ...
 
 
 class InMemoryEventPublisher:
@@ -27,16 +30,21 @@ class InMemoryEventPublisher:
             asyncio.Queue[dict[str, object]], frozenset[int] | None
         ] = {}
         self._camera_properties: dict[str, int] = {}
+        self._location_access: dict[asyncio.Queue, Callable[[int, int], Awaitable[bool]]] = {}
 
     async def subscribe(
-        self, property_ids: frozenset[int] | None = None
+        self, property_ids: frozenset[int] | None = None,
+        location_access: Callable[[int, int], Awaitable[bool]] | None = None,
     ) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=self.queue_size)
         self._subscribers[queue] = property_ids
+        if location_access is not None:
+            self._location_access[queue] = location_access
         return queue
 
     async def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
         self._subscribers.pop(queue, None)
+        self._location_access.pop(queue, None)
 
     async def publish_case(self, property_id: int, key: str) -> None:
         payload = {"type": "case_updated", "property_id": property_id, "data": {"key": key}}
@@ -47,6 +55,30 @@ class InMemoryEventPublisher:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 logger.warning("Dropped case update for a slow subscriber")
+
+    async def publish_marshal_location(
+        self, property_id: int, assignment_id: int, location: dict[str, object]
+    ) -> None:
+        payload = {
+            "type": "marshal_location",
+            "property_id": property_id,
+            "data": {"assignment_id": assignment_id, "location": location},
+        }
+        for queue, property_ids in tuple(self._subscribers.items()):
+            if property_ids is not None and property_id not in property_ids:
+                continue
+            authorize = self._location_access.get(queue)
+            try:
+                allowed = authorize is not None and await authorize(property_id, assignment_id)
+            except Exception:
+                logger.warning('Unable to authorize marshal location subscriber')
+                allowed = False
+            if not allowed:
+                continue
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                logger.warning("Dropped marshal location update for a slow subscriber")
 
     async def publish(self, event: SecurityEvent) -> None:
         payload = {

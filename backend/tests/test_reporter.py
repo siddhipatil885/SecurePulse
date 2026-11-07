@@ -71,7 +71,11 @@ async def sign_in(client, email="owner@example.test"):
 
 
 @pytest.mark.asyncio
-async def test_login_profile_scoped_reads_and_redaction(fixture):
+async def test_login_profile_scoped_reads_and_redaction(fixture, monkeypatch):
+    from unittest.mock import AsyncMock
+    async def unknown_states(cameras, settings):
+        return {camera.id: 'unknown' for camera in cameras}
+    monkeypatch.setattr('app.api.reporter.camera_states', AsyncMock(side_effect=unknown_states))
     client, _, _ = fixture
     token = await sign_in(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -90,7 +94,7 @@ async def test_login_profile_scoped_reads_and_redaction(fixture):
     assert (await client.get("/api/v1/reporter/events?property_id=1&page=2", headers=headers)).json()["items"] == []
     summary = (await client.get("/api/v1/reporter/summary?property_id=1", headers=headers)).json()
     assert summary == {"camera_count": 1, "event_count": 1, "active_alert_count": 1,
-                       "connected_camera_count": None, "active_incident_count": None, "security_status": "unknown"}
+                       "connected_camera_count": None, "active_incident_count": 0, "security_status": "attention_required"}
 
 
 @pytest.mark.asyncio

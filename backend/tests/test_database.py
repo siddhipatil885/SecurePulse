@@ -20,6 +20,7 @@ def test_models_are_registered_with_shared_metadata() -> None:
         "incident_status_history",
         "marshal_availability",
         "marshal_profiles",
+        "marshal_onboarding",
         "notification_attempts",
         "notification_outbox",
         "notification_preferences",

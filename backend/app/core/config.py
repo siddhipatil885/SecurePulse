@@ -64,9 +64,23 @@ class Settings(BaseSettings):
     )
     auth_enabled: bool = Field(default=False, validation_alias="AUTH_ENABLED")
     dashboard_registration_enabled: bool = Field(default=True, validation_alias="DASHBOARD_REGISTRATION_ENABLED")
-    dispatch_notification_provider: Literal["disabled", "recording-fake"] = Field(
+    dispatch_notification_provider: Literal["disabled", "recording-fake", "expo", "routing"] = Field(
         default="disabled", validation_alias="DISPATCH_NOTIFICATION_PROVIDER")
+    expo_push_access_token: str = Field(default='', validation_alias='EXPO_PUSH_ACCESS_TOKEN', repr=False)
+    twilio_account_sid: str = Field(default="", validation_alias="TWILIO_ACCOUNT_SID", repr=False)
+    twilio_auth_token: str = Field(default="", validation_alias="TWILIO_AUTH_TOKEN", repr=False)
+    twilio_sms_from: str = Field(default="", validation_alias="TWILIO_SMS_FROM")
+    twilio_voice_from: str = Field(default="", validation_alias="TWILIO_VOICE_FROM")
+    twilio_whatsapp_from: str = Field(default="", validation_alias="TWILIO_WHATSAPP_FROM")
+    emergency_police_webhook_url: str = Field(default="", validation_alias="EMERGENCY_POLICE_WEBHOOK_URL")
+    emergency_fire_webhook_url: str = Field(default="", validation_alias="EMERGENCY_FIRE_WEBHOOK_URL")
+    emergency_ambulance_webhook_url: str = Field(default="", validation_alias="EMERGENCY_AMBULANCE_WEBHOOK_URL")
+    emergency_webhook_secret: str = Field(default="", validation_alias="EMERGENCY_WEBHOOK_SECRET", repr=False)
+    alert_routing_destinations: str = Field(default="", validation_alias="ALERT_ROUTING_DESTINATIONS")
     evidence_root: str = Field(default="", validation_alias="EVIDENCE_ROOT")
+    marshal_identity_key: str = Field(default='', validation_alias='MARSHAL_IDENTITY_KEY', repr=False)
+    marshal_identity_root: str = Field(default='', validation_alias='MARSHAL_IDENTITY_ROOT')
+    marshal_identity_insecure_test_mode: bool = Field(default=False, validation_alias='MARSHAL_IDENTITY_INSECURE_TEST_MODE')
     reporter_evidence_max_bytes: int = Field(default=10_000_000, ge=1_000_000, validation_alias="REPORTER_EVIDENCE_MAX_BYTES")
     reporter_evidence_max_files: int = Field(default=5, ge=1, le=50, validation_alias="REPORTER_EVIDENCE_MAX_FILES")
     reporter_evidence_max_incident_bytes: int = Field(default=50_000_000, ge=1_000_000, validation_alias="REPORTER_EVIDENCE_MAX_INCIDENT_BYTES")
@@ -131,6 +145,10 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_ENABLED must be true in production")
         if self.app_env == "production" and self.dispatch_notification_provider == "recording-fake":
             raise ValueError("The recording fake notification provider is development-only")
+        if self.dispatch_notification_provider == "routing" and (
+            bool(self.twilio_account_sid) != bool(self.twilio_auth_token)
+        ):
+            raise ValueError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be configured together")
         if self.app_env == "production" and not self.database_url:
             raise ValueError("DATABASE_URL must be configured in production")
         if not self.parsed_cors_origins:
@@ -143,6 +161,15 @@ class Settings(BaseSettings):
     def parsed_cors_origins(self) -> list[str]:
         """Return normalized comma-separated browser origins."""
         return [origin.strip().rstrip("/") for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def parsed_alert_routing_destinations(self) -> tuple[str, ...]:
+        """Return explicitly configured external destinations."""
+        return tuple(
+            destination.strip()
+            for destination in self.alert_routing_destinations.split(",")
+            if destination.strip()
+        )
 
 
 @lru_cache

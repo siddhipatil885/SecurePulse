@@ -6,6 +6,7 @@ import { serverUrl } from '../config';
 import { Screen } from '../components/Screen';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Notice, ui } from '../components/Content';
+import { router } from 'expo-router';
 
 export function LoginScreen() {
   const { state, online } = useAuth();
@@ -33,6 +34,6 @@ export function LoginScreen() {
     <TextInput accessibilityLabel="Password" style={ui.input} value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="current-password" editable={!busy} maxLength={128} />
     <PrimaryButton label={busy ? 'Signing in…' : 'Sign in'} onPress={() => void submit()} disabled={busy || !email.trim() || !password || !serverUrl || !online || Platform.OS === 'web'} />
     <PrimaryButton variant="secondary" label="Restore saved session" onPress={() => void session.restore()} disabled={busy || !online || !serverUrl} />
-    <Notice>Contact your property administrator if you need an account or password assistance.</Notice>
+    <PrimaryButton label="Forgot password or verify email" variant="secondary" disabled={busy || !serverUrl} onPress={() => router.push('/recover')} />
   </Screen>;
 }

@@ -17,7 +17,7 @@
 - Marshal availability is a manual `on_duty` / `available` update. It is
   considered fresh for five minutes. Marshal capacity counts both offers and
   accepted/in-progress work.
-- Offers default to 60 seconds and accept 10–3600 seconds. After a decline or
+- Offers default to five minutes and accept 10–300 seconds. After a decline or
   expiry, the next eligible marshal is offered the incident. Selection sorts
   by active workload, then profile ID, and skips marshals who already declined
   or timed out on that incident. After three offers or when none are eligible,
@@ -26,6 +26,10 @@
   version: accept/decline, then progress through `EN_ROUTE`, `ON_SCENE`, and
   `COMPLETED`. Completion resolves the incident and writes assignment and
   incident history.
+- Owners can use `POST /dispatch/offers/broadcast` with selected marshal profile
+  IDs to create simultaneous invitations. First acceptance wins under a source
+  incident row lock; remaining invitations are cancelled. Migration `0019` keeps
+  one accepted/in-progress responder per incident and permits concurrent offers.
 - Assignment changes, history, and notification intents are stored in the
   same transaction. The worker retries failed deliveries up to five attempts
   with exponential delay and jitter; `EXHAUSTED` rows require operator review.

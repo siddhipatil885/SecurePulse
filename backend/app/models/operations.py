@@ -140,6 +140,7 @@ class MarshalProfile(Base):
     service_area: Mapped[str | None] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     capacity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(20), default='REQUIRED', server_default='REQUIRED', nullable=False)
 
 
 class MarshalAvailability(Base):
@@ -149,6 +150,12 @@ class MarshalAvailability(Base):
     on_duty: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     available: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    latitude: Mapped[float | None] = mapped_column()
+    longitude: Mapped[float | None] = mapped_column()
+    location_accuracy_m: Mapped[float | None] = mapped_column()
+    location_heading: Mapped[float | None] = mapped_column()
+    location_speed_mps: Mapped[float | None] = mapped_column()
+    location_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Assignment(Base):
@@ -160,12 +167,16 @@ class Assignment(Base):
             "uq_assignments_one_active_offer",
             "security_event_id",
             unique=True,
-            postgresql_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
-            sqlite_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
         ),
         Index("uq_assignments_one_active_reporter", "reporter_incident_id", unique=True,
-            postgresql_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
-            sqlite_where=text("status IN ('OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE')")),
+            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')")),
+        Index('uq_assignment_pending_camera_marshal', 'security_event_id', 'marshal_profile_id', unique=True,
+            postgresql_where=text("status = 'OFFERED'"), sqlite_where=text("status = 'OFFERED'")),
+        Index('uq_assignment_pending_reporter_marshal', 'reporter_incident_id', 'marshal_profile_id', unique=True,
+            postgresql_where=text("status = 'OFFERED'"), sqlite_where=text("status = 'OFFERED'")),
         CheckConstraint("(security_event_id IS NOT NULL AND reporter_incident_id IS NULL) OR "
                         "(security_event_id IS NULL AND reporter_incident_id IS NOT NULL)",
                         name="ck_assignments_one_incident_source"),

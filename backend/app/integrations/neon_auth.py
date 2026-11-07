@@ -31,6 +31,14 @@ class NeonAuth:
         if response.status_code == 429:
             raise ApplicationError("AUTH_RATE_LIMITED", "Too many sign-in attempts. Please try again later.", 429)
         if not response.is_success:
+            try:
+                code = response.json().get('code', '')
+            except (ValueError, AttributeError):
+                code = ''
+            if code in ('MISSING_ORIGIN', 'INVALID_ORIGIN', 'INVALID_CALLBACK_URL'):
+                raise ApplicationError('AUTH_CONFIGURATION_ERROR', 'The account service origin is not configured correctly. Contact your administrator.', 503)
+            if code in ('FAILED_TO_SEND_EMAIL', 'FAILED_TO_SEND_VERIFICATION_EMAIL', 'FAILED_TO_SEND_VERIFICATION_OTP', 'FAILED_TO_SEND_OTP'):
+                raise ApplicationError('AUTH_DELIVERY_UNAVAILABLE', 'The account service could not send email. Contact your administrator.', 503)
             raise ApplicationError("INVALID_CREDENTIALS", "Unable to sign in. Check your credentials or verify your email.", 401)
         try:
             return response.json()
@@ -92,3 +100,18 @@ class NeonAuth:
             if error.status_code == 401:
                 raise ApplicationError("INVALID_CURRENT_PASSWORD", "The current password is incorrect.", 400) from None
             raise
+
+    async def public_operation(self, path, body):
+        """OTP endpoints use the same trusted Origin and ephemeral cookie jar."""
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False,
+                headers={"Origin": get_settings().parsed_cors_origins[0]}) as client:
+            self.client = client
+            try:
+                return await self._request(path, body)
+            finally:
+                if client.cookies:
+                    try:
+                        await self._request('/sign-out', {})
+                    except ApplicationError:
+                        pass
+                self.client = None

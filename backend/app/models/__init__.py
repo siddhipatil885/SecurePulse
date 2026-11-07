@@ -8,6 +8,7 @@ from app.models.reporter_incident import ReporterIncident, ReporterIncidentEvide
 from app.models.track import Track
 from app.models.alert import Alert
 from app.models.tenancy import Property, PropertyMembership, User
+from app.models.marshal_onboarding import MarshalOnboarding
 from app.models.operations import (
     Assignment,
     AssignmentEvent,
@@ -24,7 +25,7 @@ from app.models.operations import (
 
 __all__ = [
     "Alert", "Assignment", "AssignmentEvent", "AuditRecord", "Camera", "CameraHealthObservation", "Evidence",
-    "IncidentStatusHistory", "MarshalAvailability", "MarshalProfile", "NotificationAttempt",
+    "IncidentStatusHistory", "MarshalAvailability", "MarshalProfile", "MarshalOnboarding", "NotificationAttempt",
     "NotificationOutbox", "NotificationPreference", "Property", "PropertyMembership",
     "SecurityEvent", "UserDeviceToken",
     "ReporterIncident", "ReporterIncidentEvidence", "ReporterIncidentTimeline",

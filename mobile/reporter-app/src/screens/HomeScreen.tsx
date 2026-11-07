@@ -16,7 +16,10 @@ export function HomeScreen() {
   return <Screen refreshing={refreshing} onRefresh={refresh}>
     <Text style={ui.title}>Your security overview</Text>
     <PropertyBanner />
-    <Notice>Security status: unavailable. An automated detection does not confirm an incident.</Notice>
+    <Notice>{summary.data?.security_status === 'attention_required' ? 'Active alerts or incident records need review.'
+      : summary.data?.security_status === 'camera_issue' ? 'A camera is offline or disabled.'
+      : summary.data?.security_status === 'no_active_incidents' ? 'No active incident records. Camera health is currently verified.'
+      : 'Camera monitoring cannot currently be verified.'} An automated detection does not confirm an incident.</Notice>
     <PrimaryButton label="Report incident" onPress={() => router.push('/report')} disabled={!propertyId} />
     <PrimaryButton variant="secondary" label="Alerts" onPress={() => router.push('/alerts')} />
     <PrimaryButton variant="secondary" label="My incident reports" onPress={() => router.push('/incidents')} />
@@ -28,7 +31,7 @@ export function HomeScreen() {
       <InfoCard label="Registered cameras" value={String(summary.data.camera_count)} detail="Registration does not verify a live connection." />
       <InfoCard label="Connected cameras" value={summary.data.connected_camera_count === null ? 'Unavailable' : String(summary.data.connected_camera_count)} />
       <InfoCard label="Active alerts" value={String(summary.data.active_alert_count)} detail="Operator alerts recorded by the backend." />
-      <InfoCard label="Confirmed incidents" value={summary.data.active_incident_count === null ? 'Unavailable' : String(summary.data.active_incident_count)} detail="Incident confirmation is not available yet." />
+      <InfoCard label="Open incident records" value={summary.data.active_incident_count === null ? 'Unverified' : String(summary.data.active_incident_count)} detail="Actionable camera records and your own open reports." />
     </>}
     <Text style={ui.heading}>Recent security alerts</Text>
     <QueryState query={events} empty={!recent.length} />

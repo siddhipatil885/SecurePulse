@@ -8,6 +8,7 @@ import { Screen } from '../components/Screen';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Notice, QueryState, ui } from '../components/Content';
 import { EvidenceVideo } from '../components/EvidenceVideo';
+import { AssignMarshal } from '../components/AssignMarshal';
 
 function idFromRoute(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -44,6 +45,7 @@ export function IncidentDetailScreen() {
       {incident.description && <Notice>{incident.description}</Notice>}
       <Notice>Submitted {new Date(incident.created_at).toLocaleString()}</Notice>
       {incident.dispatch && <Notice>Response status: {incident.dispatch.status.replaceAll('_', ' ')}</Notice>}
+      <AssignMarshal key={`${incident.property_id}:${incident.id}`} propertyId={incident.property_id} source="reporter" incidentId={incident.id} status={incident.status} />
       <Text style={ui.heading}>Timeline</Text>
       {incident.timeline.map(item => <Notice key={item.id}>{new Date(item.occurred_at).toLocaleString()} · {item.message}</Notice>)}
       <Text style={ui.heading}>Evidence</Text>
