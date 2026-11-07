@@ -26,6 +26,7 @@ for module in (auth, reporter_auth, dashboard, evidence, marshal, operator_cases
 
 
 async def seed(factory, reset=False):
+    """Seed browser-test identities and properties, optionally clearing this test DB."""
     dashboard.auth_limiter = SlidingWindowRateLimiter(5000)
     async with factory() as session:
         if reset:
@@ -53,6 +54,7 @@ async def seed(factory, reset=False):
 
 @asynccontextmanager
 async def lifespan(app):
+    """Create isolated browser-test storage and release overrides and resources on exit."""
     with tempfile.TemporaryDirectory(prefix="securepulse-dashboard-e2e-") as directory:
         settings.evidence_root = directory
         # A tiny valid PNG proves authenticated evidence actually renders.
@@ -67,6 +69,7 @@ async def lifespan(app):
         dashboard.get_session_factory = lambda: factory
         await seed(factory)
         async def override():
+            """Yield a request session backed only by the temporary browser-test DB."""
             async with factory() as session:
                 yield session
         app.dependency_overrides[get_session] = override
@@ -95,6 +98,6 @@ async def health():
 
 @app.post('/__test/reset')
 async def reset_test_database():
-    # Only this isolated app has the route. The real app never imports it.
+    """Reset this isolated fixture app; the production app never exposes this route."""
     await seed(app.state.test_factory, reset=True)
     return {'mode': 'isolated-browser-test', 'reset': True}

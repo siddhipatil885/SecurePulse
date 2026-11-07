@@ -12,6 +12,7 @@ import type { DashboardData, PropertyAccess } from '../api';
 import type { Camera, PersonTrack, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
+/** Keep the selected property's monitoring and incident views current via scoped updates. */
 const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);

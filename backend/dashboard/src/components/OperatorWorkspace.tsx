@@ -30,6 +30,7 @@ function EvidencePreview({ item, path }: { item: CaseEvidence; path: string }) {
       : <img className="evidence-media" alt={`Incident evidence ${item.id}`} src={url} onError={failed} />)}</li>;
 }
 
+/** Show an authorized case's response data and bind pending exports to that case. */
 function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
   propertyId: number; selected: Pick<CaseSummary, 'source' | 'source_id'>; refreshVersion: number; onChanged: () => void;
 }) {
@@ -71,6 +72,7 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
     if (ref.current?.signature !== signature) ref.current = { signature, key: crypto.randomUUID() };
     return ref.current.key;
   }
+  /** Apply a versioned case or dispatch change and reload after success or conflict. */
   async function mutate(kind: 'action' | 'offer' | 'cancel', event?: FormEvent) {
     event?.preventDefault();
     if (busy || !data) return;
@@ -97,6 +99,7 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
     } catch (error) { setActionError(message(error)); }
     finally { setBusy(false); setRevision(value => value + 1); }
   }
+  /** Export case JSON with a bounded request that cleanup cancels on navigation. */
   async function downloadReport() {
     if (!data || reportRequest.current) return;
     const controller = new AbortController();

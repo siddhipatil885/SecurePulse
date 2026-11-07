@@ -321,6 +321,7 @@ async def test_case_report_uses_complete_history_and_only_incident_notifications
 
 @pytest.mark.parametrize('source', ['camera', 'reporter'])
 async def test_download_report_includes_evidence_beyond_the_first_page(site, source):
+    """Verify both incident sources export every evidence reference without private paths."""
     client, factory = site
     await login(client)
     async with factory() as session:

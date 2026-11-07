@@ -89,6 +89,12 @@ async def evidence(property_id: int, source: CaseSource, source_id: int,
 @router.get("/{source}/{source_id}/report", response_model=IncidentReport)
 async def report(property_id: int, source: CaseSource, source_id: int,
                  principal: Principal = Depends(operator), session: AsyncSession = Depends(get_session)):
+    """Build an audited report for an authorized property's incident.
+
+    Include every timeline and evidence-metadata page, assignment history and
+    matching notification attempts. Media bytes and historical GPS are excluded.
+    Request a retry if pagination can no longer supply the expected records.
+    """
     service = CaseService(session)
     incident = await service.detail(property_id, source, source_id)
     timeline_page = await service.timeline(property_id, source, source_id, 1, 100)

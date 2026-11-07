@@ -46,8 +46,7 @@ class ResponderLocation(BaseModel):
     @field_validator('updated_at')
     @classmethod
     def utc_timestamp(cls, value):
-        # The stored timestamp is UTC; SQLite fixtures drop the timezone marker.
-        # Always expose an unambiguous timestamp to browsers in other timezones.
+        """Expose UTC explicitly, restoring markers dropped by SQLite storage."""
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 

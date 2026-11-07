@@ -8,6 +8,7 @@ test.beforeEach(async ({ request }) => {
 });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
+/** Open an isolated owner case with a real offer and optional marshal acceptance. */
 async function openIncident(page: Page, accept = true) {
   await page.goto('/');
   await page.getByLabel('Email', { exact: true }).fill('owner@example.test');

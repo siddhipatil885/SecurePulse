@@ -13,6 +13,7 @@ from app.core.config import Settings
 
 @pytest.fixture
 def compose_command():
+    """Select an available Compose CLI or skip rendering checks when none is installed."""
     if os.getenv('COMPOSE_BINARY'):
         return [os.environ['COMPOSE_BINARY']]
     if shutil.which('docker'):
@@ -23,6 +24,11 @@ def compose_command():
 
 
 def render(command, overrides=None):
+    """Render canonical Compose as JSON using isolated, overridable test settings.
+
+    Ignore deployment env files, capture output and never start containers or
+    print rendered credentials. Fail if configuration rendering is unsuccessful.
+    """
     env = {**os.environ, 'POSTGRES_PASSWORD': 'compose-test-only',
         'MQTT_BACKEND_PASSWORD': 'compose-test-only', 'MQTT_FRIGATE_PASSWORD': 'compose-test-only',
         'DATABASE_URL': '', 'DATABASE_URL_UNPOOLED': '', 'NEON_AUTH_BASE_URL': '', 'NEON_AUTH_JWKS_URL': '',
@@ -42,6 +48,7 @@ def render(command, overrides=None):
 
 
 def test_default_delivery_stays_disabled_and_identity_files_have_private_persistent_storage(compose_command):
+    """Check disabled delivery and a separate writable, persistent identity volume."""
     config = render(compose_command)
     backend = config['services']['backend']
     settings = Settings(_env_file=None, **backend['environment'])
@@ -60,6 +67,7 @@ def test_default_delivery_stays_disabled_and_identity_files_have_private_persist
 
 @pytest.mark.parametrize('mode', ['expo', 'routing'])
 def test_provider_and_identity_settings_reach_backend_configuration(compose_command, mode):
+    """Check provider settings and a valid identity key survive Compose interpolation."""
     values = {'DISPATCH_NOTIFICATION_PROVIDER': mode, 'MARSHAL_IDENTITY_KEY': Fernet.generate_key().decode(),
         'EXPO_PUSH_ACCESS_TOKEN': 'test-expo-access', 'TWILIO_ACCOUNT_SID': 'test-twilio-account',
         'TWILIO_AUTH_TOKEN': 'test-twilio-auth', 'TWILIO_SMS_FROM': '+15550001',
