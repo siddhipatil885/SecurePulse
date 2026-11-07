@@ -7,9 +7,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 30000,
-  use: { baseURL: 'http://127.0.0.1:15173', browserName: 'chromium',
-    ...(process.env.PLAYWRIGHT_CHROME_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHROME_CHANNEL } : {}),
-  },
+  use: { baseURL: 'http://127.0.0.1:15173', trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium', ...(process.env.PLAYWRIGHT_CHROME_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHROME_CHANNEL } : {}) } },
+    { name: 'webkit', use: { browserName: 'webkit' } },
+  ],
   webServer: [
     { command: `"${python}" -m uvicorn dashboard_test_server:app --app-dir ../tests --host 127.0.0.1 --port 18081`,
       env: { PYTHONPATH: '..' }, url: 'http://127.0.0.1:18081/health', reuseExistingServer: false },

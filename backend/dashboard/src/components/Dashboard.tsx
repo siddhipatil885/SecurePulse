@@ -12,6 +12,7 @@ import type { DashboardData, PropertyAccess } from '../api';
 import type { Camera, PersonTrack, SecurityAlert, SecurityEvent, SystemStatus } from '../types';
 import './Dashboard.css';
 
+/** Keep the selected property's monitoring and incident views current via scoped updates. */
 const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
@@ -78,7 +79,7 @@ const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
           if (payload.type === 'person_tracks' && payload.data && Array.isArray(payload.data.tracks)) {
             const data = payload.data;
             setTracksByCamera(current => ({ ...current, [String(data.camera_id)]: data.tracks.map(mapTrack) }));
-          } else if (payload.type === 'security_event' || payload.type === 'case_updated') scheduleRefresh();
+          } else if (payload.type === 'security_event' || payload.type === 'case_updated' || payload.type === 'marshal_location') scheduleRefresh();
         } catch { scheduleRefresh(); }
       };
       socket.onerror = () => { if (active) setStreamConnected(false); };

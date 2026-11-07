@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class OfferCreate(BaseModel):
@@ -42,6 +42,12 @@ class ResponderLocation(BaseModel):
     distance_m: float | None = None
     eta_seconds: int | None = None
     eta_source: Literal["gps_speed", "urban_fallback"] | None = None
+
+    @field_validator('updated_at')
+    @classmethod
+    def utc_timestamp(cls, value):
+        """Expose UTC explicitly, restoring markers dropped by SQLite storage."""
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class OfferView(BaseModel):

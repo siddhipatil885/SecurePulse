@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 
 const password = 'Dashboard-test-pass123';
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('http://127.0.0.1:18081/__test/reset');
+  expect(response.ok()).toBeTruthy();
+  expect((await response.json()).mode).toBe('isolated-browser-test');
+});
 async function signIn(page, email = 'owner@example.test') {
   await page.goto('/');
   await page.getByLabel('Email', { exact: true }).fill(email);
