@@ -1,46 +1,175 @@
 # SecurePulse
 
-SecurePulse connects Frigate video detections to a FastAPI/PostgreSQL backend,
-live React dashboard, reporter mobile app, and marshal dispatch workflows.
+SecurePulse connects camera detections to incident review, property-owner alerts
+and marshal response. It combines Frigate/MQTT, a FastAPI backend, PostgreSQL,
+a React command dashboard, and separate Expo apps for owners and marshals.
 
-## Deploy on the main camera PC
+**Status: 7 November 2026.** The core response workflow is implemented and tested
+in the repository. Real-camera, physical-phone and live-provider acceptance is
+still required before production sign-off. The complete PRD is not delivered.
 
-Start with [the main host handoff](docs/runbooks/main-host-handoff.md). It covers
-copying this source, identifying the existing Docker project, preserving data,
-deploying changes, restoring real publishers, and running acceptance checks.
+## What is done
 
-The canonical Compose file is `backend/deployment/docker-compose.yml`. The
-isolated `securepulse-person1` project, historical `deployment` project, and
-standalone Frigate have independent runtime data. See the
-[deployment inventory](docs/DEPLOYMENT_INVENTORY.md) before selecting a project.
+| Area | Implemented |
+| --- | --- |
+| Accounts and access | Property memberships and role checks, JWT/cookie sessions, secure mobile token storage, managed sign-in and email-code recovery, and session/device revocation. |
+| Camera pipeline | Frigate MQTT parsing, event normalization, database deduplication, anonymous person-track updates, camera health, and protected live-view/evidence access. |
+| Security rules | Person detection, restricted-zone entry, loitering, line crossing and multiple-person rules, with confidence, score, severity and reason. Real-world accuracy still needs validation. |
+| Owner app | Expo SDK 58 login, property selection, cameras/live viewing, detection review, incident reporting with optional image/video attachments, history and marshal assignment controls. |
+| Dispatch | Duty/availability/capacity checks, five-minute offers, multiple selected recipients, first-acceptance locking, competing-offer cancellation, timeout/escalation handling and assignment history. |
+| Marshal app | Separate SDK 58 app with onboarding, duty controls, assigned jobs, accept/decline, external-map navigation, incident-photo viewing, notes and response progress. Incoming offers beep/vibrate while foregrounded. |
+| Marshal onboarding | Government-ID details/photos, portrait, personal and emergency contacts, consent, encrypted storage, manual administrator approval, duty gating and withdrawal. Passport, driving licence and voter ID are supported; Aadhaar is excluded from this manual flow. |
+| Command dashboard | Property-scoped incident queue, filters, evidence, timeline, status actions, assignment/cancellation, and authenticated realtime updates with polling fallback. |
+| Responder position | Foreground location submission for the selected active job. The dashboard shows accepted responders' last reported coordinates, accuracy, update time, stale-data labels, map links and basic arrival estimates. |
+| Incident downloads | JSON reports with the full timeline, notes, evidence metadata, assignments and notification history. Downloads support retry, timeout and cancellation on navigation; evidence beyond the first page is included. |
+| Notification infrastructure | Owner-app Expo registration, outbox delivery, tickets/receipts and notification taps; SMS, voice, WhatsApp and agency-webhook adapters. Live operation requires configured credentials and acceptance tests. |
+| Deployment foundations | Canonical Compose stack, migrations through `0020`, health checks, host handoff/recovery scripts, provider-setting passthrough, and a dedicated persistent volume for encrypted identity documents. |
 
-After deployment, from the repository root on the camera PC:
+The current marshal workflow is:
+
+```text
+Onboarding → Administrator approval → On duty → Offer
+Accept → En route → On scene → Notes → Completed
+Decline / Expiry → Dispatcher follow-up or configured retry
+```
+
+Multiple offers produce **one accepted responder**, not a multi-person response
+team. `ON_SCENE` currently covers arrival and investigation; completion resolves
+the incident.
+
+## What is left to build
+
+| Workstream | Remaining work |
+| --- | --- |
+| Reliable marshal notifications | Remote push in the marshal app; background/terminated delivery and alert behavior; native-build provisioning and device acceptance. Current jobs poll every ten seconds while foregrounded. |
+| Continuous tracking | Location updates independent of the selected detail screen, appropriate background operation, owner-app tracking, embedded maps/routes, GPS history and traffic-aware ETA. Current estimates use straight-line distance and reported speed or a fallback. |
+| Intelligent dispatch | Nearest-responder selection, fresh idle-responder positions, skills, geography, incident priority, travel time and controlled automatic dispatch. Current selection uses eligibility and workload, then profile ID. |
+| Marshal teamwork | Nearby backup requests, calling other marshals, team assignments, roles, task splitting and live chat. |
+| Field evidence and closure | Marshal photo/video capture and upload, video review where needed, separate investigation and final closure, supervisor review and backend-enforced resolution requirements. |
+| Complete incident reports | Automatic report generation/storage at closure, printable/shareable exports, GPS logs and the required media package. Current downloads contain evidence references, not embedded media or historical GPS. |
+| Sensors and SOS | Dedicated intrusion-sensor registration/adapters, sensor-camera event fusion, and a panic SOS workflow. A manual report form is already available. |
+| Additional analytics | Weapon, tailgating, object-removal, camera-tamper and validated vehicle detection; explicit recommended actions and priority policies. |
+| Operational tools | Administrator onboarding-review UI, contact verification where required, identity-key rotation, retention/deletion processes, SLA indicators, response-time analytics and QRT utilization. Review currently uses a trusted local CLI. |
+| Scale and resilience | Durable pre-database ingestion, recoverable/shared realtime and rule state, load testing, high availability, monitoring/alerting and full data/media/key disaster recovery. |
+
+One marshal profile currently belongs to one property. Owner multi-property
+access exists; a shared response fleet spanning properties remains future work.
+
+Facial recognition, ANPR, smart geofencing, dedicated medical/fire and other
+safety workflows, wearables, predictive analytics, drones, city-wide networking
+and insurance integration remain roadmap capabilities. Resolve the PRD's
+placement of weapon detection in both functional scope and phase two before
+making it an MVP release requirement.
+
+## What still needs live verification
+
+- Deploy to the verified camera PC and complete real person walk-throughs,
+  streaming/evidence playback and false-alarm evaluation.
+- Run an owner → incident → marshal → resolution drill on Android and iPhone,
+  including permissions, maps handoff, stale locations, network loss and recovery.
+- Configure HTTPS, Expo/platform push credentials and any selected external
+  providers; verify real delivery and receipts. Agency webhooks need an approved
+  receiving integration and do not directly connect to public emergency services.
+- Exercise container replacement and backup/restore for the database, camera
+  media, reporter attachments, encrypted identity documents and separate keys.
+- Measure the PRD's availability, incident/notification/dispatch latency,
+  five-second tracking and device-capacity targets. These targets are not yet
+  demonstrated by the automated tests.
+- Complete the production security/privacy review and required compliance work.
+  Identity encryption and scoped API/media access do not establish end-to-end
+  encryption for the whole platform or ISO 27001 certification.
+
+**Next priorities:** accept the real-device pilot, make marshal alerts and
+tracking dependable in the background, then complete teamwork/evidence/closure
+and nearest-responder dispatch. Expand sensor and advanced-AI coverage after
+the core response path is accepted.
+
+## Repository layout
+
+| Directory | Purpose |
+| --- | --- |
+| `backend/app/` | API, authentication, incidents, security rules, dispatch, notifications and onboarding. |
+| `backend/alembic/` | Database migrations. |
+| `backend/dashboard/` | Owner/command-center React dashboard. |
+| `mobile/reporter-app/` | Property-owner/reporter Expo app. |
+| `mobile/marshal-app/` | Marshal response Expo app. |
+| `backend/deployment/` | Canonical Compose stack and environment example. |
+| `backend/scripts/` | Host setup, diagnostics, acceptance and recovery tools. |
+| `docs/runbooks/` | Setup, deployment and operating instructions. |
+
+## Local development
+
+Use Python 3.12 and Node 24 LTS. Keep database URLs, signing keys, provider
+credentials and private environment files out of Git and client-side variables.
+
+1. Configure the intended development backend using
+   [`backend/.env.example`](backend/.env.example) and the
+   [backend setup guide](backend/README.md). Preserve existing private settings.
+   Enable authentication, use a strong signing key and apply reviewed migrations
+   to the intended database. Camera ingestion additionally needs Frigate/MQTT.
+2. From `backend/`, activate its virtual environment, install
+   `requirements-test.txt`, then run
+   `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+3. From `backend/dashboard/`, run `npm ci` and `npm run dev`. For the direct
+   backend above, set `VITE_BACKEND_URL=http://127.0.0.1:8000` in the private
+   dashboard `.env.local`. The default Compose backend port is `18000`.
+4. Configure `EXPO_PUBLIC_SERVER_URL` in each mobile app's private `.env` to the
+   phone-reachable backend origin, without `/api/v1`. From each app directory,
+   run `npm ci` and `npm start -- --lan --go`. Owner Metro uses `8081`; marshal
+   Metro uses `8082`. Both require SDK 58-compatible Expo Go for this mode.
+
+Expo Go supports the development app flow; remote push requires a configured
+native development/release build. Identity uploads require HTTPS, a dedicated
+`MARSHAL_IDENTITY_KEY` and private storage. Marshals must complete onboarding and
+receive approval before going on duty.
+
+Detailed guides: [owner app](mobile/reporter-app/README.md),
+[marshal app](mobile/marshal-app/README.md),
+[dashboard](docs/runbooks/dashboard.md),
+[onboarding and review](docs/runbooks/marshal-onboarding.md),
+[environment/phone setup](docs/runbooks/environment-setup.md), and
+[Neon database/auth with host-local media](docs/runbooks/neon.md).
+
+## Deploy on the camera PC
+
+Follow the [main-host handoff](docs/runbooks/main-host-handoff.md) and
+[deployment inventory](docs/DEPLOYMENT_INVENTORY.md) before selecting an existing
+Compose project. Canonical configuration lives at
+`backend/deployment/docker-compose.yml`. Preserve its data and volumes; copying
+code or environment files does not copy camera footage or uploaded documents.
+
+Delivery defaults to `DISPATCH_NOTIFICATION_PROVIDER=disabled`. Use `expo` for
+app push or `routing` for app push plus configured external destinations.
+Encrypted identity files persist separately in the `marshal_identities` volume;
+back up their key separately. See the [dashboard deployment settings](docs/runbooks/dashboard.md#compose-notification-and-identity-settings).
+
+After deploying on the verified host, run from the repository root:
 
 ```powershell
 ./backend/scripts/acceptance_host.ps1 -ProjectName YOUR_VERIFIED_PROJECT
 ```
 
-During maintenance, add `-RestartRecovery` to test broker/backend restarts. JSON
-evidence goes to ignored `backend/operational-evidence/`. Complete both person
-walk-throughs and browser playback/overlay checks before signing off.
+During maintenance, `-RestartRecovery` also exercises broker/backend restarts.
+Sanitized results go to ignored `backend/operational-evidence/`. Physical camera
+walk-throughs and playback checks are still part of acceptance.
 
-## Development and status
+## Validation
 
-- [Backend setup and APIs](backend/README.md)
-- [Dashboard accounts, properties and incident actions](docs/runbooks/dashboard.md)
-- [Reporter mobile app](mobile/reporter-app/README.md)
-- [Mobile/backend integration and acceptance](docs/runbooks/mobile-backend-integration.md)
-- [Private environment setup and phone host discovery](docs/runbooks/environment-setup.md)
-- [Neon login/database with local images and videos](docs/runbooks/neon.md)
-- [Neon live verification and changes](docs/status/neon-20261105.md)
-- [Integration verification results](docs/status/mobile-backend-integration-20261104.md)
-- [Completed work and pending host acceptance](docs/REMAINING_WORK.md)
-- [Latest local verification](docs/status/main-host-readiness-20261104.md)
-- [Database operations](docs/runbooks/backend-database.md)
-- [Video event pipeline](docs/runbooks/video-event-pipeline.md)
+Recorded on 7 November 2026: feature CI passed **406 backend tests**, including
+PostgreSQL and Compose checks. The committed dashboard passed **22 browser
+checks across Chromium and WebKit**, plus unit tests, build and lint. Owner-app
+tests, type checks and Android/iOS bundle exports also passed. Both mobile apps
+have passed local type checks and bundle exports; marshal-app CI coverage remains
+to be added. These results do not replace the live checks above.
 
-Backend checks run with `python -m pytest -q` from `backend` after installing
-`requirements-test.txt`. PostgreSQL acceptance requires its documented test
-database and `RUN_POSTGRES_TESTS=1`. Dashboard checks are `npm test`,
-`npm run build`, and `npm run lint` from `backend/dashboard` with Node 22.18+.
-Reporter checks are `npm run typecheck` and `npm test` from `mobile/reporter-app`.
+| Location | Checks |
+| --- | --- |
+| `backend/` | Install `requirements-test.txt`; run `python -m pytest -q`. PostgreSQL acceptance requires its isolated test setup and `RUN_POSTGRES_TESTS=1`. Compose-rendering checks require the Compose CLI. |
+| `backend/dashboard/` | `npm test`, `npm run build`, `npm run lint`; install Playwright Chromium/WebKit, then `npm run test:browser`. |
+| `mobile/reporter-app/` | `npm run typecheck`, `npm test`, `npx expo-doctor@latest`. |
+| `mobile/marshal-app/` | `npm run typecheck`, `npx expo-doctor@latest`. |
+
+Browser tests use an isolated fixture backend rather than deployment data.
+Older audits and status files are dated snapshots and may predate features
+listed here. This README is the current overview; runbooks provide detailed
+procedures and prerequisites.
