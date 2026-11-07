@@ -168,7 +168,7 @@ it('retries notification preferences, handles denied push permissions and retrie
 });
 
 it('starts, stops and releases live video on screen blur, including a late access response', async () => {
-  const grant = { url: '/live?grant=fixture', expires_at: new Date(Date.now() + 300000).toISOString() };
+  const grant = { url: '/live?grant=fixture', expires_at: new Date(Date.now() + 300000).toISOString(), expires_in_seconds: 300 };
   jest.mocked(api.liveCamera).mockResolvedValue(grant);
   const view = await render(wrap(<LiveCamera propertyId={1} cameraId={2} enabled />));
   await fireEvent.press(view.getByText('Start live video'));
@@ -248,10 +248,12 @@ it('filters incident history, loads the next page and opens the chosen report', 
 
 it('opens evidence, shows a failed preview and requests fresh access on retry', async () => {
   mockParams = { id: '9' }; mockAuth.state.token = { access_token: 'test-session-token' };
-  jest.mocked(api.incident).mockResolvedValue({ id: 9, status: 'RECEIVED', incident_type: 'THEFT', address: '11 North Street', created_at: new Date().toISOString(), timeline: [], dispatch: null,
+  jest.mocked(api.incident).mockResolvedValue({ id: 9, property_id: 1, status: 'RECEIVED', incident_type: 'THEFT', address: '11 North Street', created_at: new Date().toISOString(), timeline: [], dispatch: null,
     evidence: [{ id: 10, original_filename: 'snapshot.jpg', media_type: 'image/jpeg', byte_size: 1024 }] } as any);
   jest.mocked(api.reporterEvidenceAccess).mockResolvedValue({ url: '/evidence/10?grant=fixture', expires_at: new Date(Date.now() + 300000).toISOString() } as any);
   const view = await render(wrap(<IncidentDetailScreen />));
+  await waitFor(() => expect(view.getByText('Assign marshal')).toBeTruthy());
+  expect(api.assignment).toHaveBeenCalledWith(1, 'reporter', 9);
   await waitFor(() => expect(view.getByText('View image')).toBeTruthy());
   await fireEvent.press(view.getByText('View image'));
   await waitFor(() => expect(view.getByLabelText('snapshot.jpg')).toBeTruthy());
@@ -261,4 +263,37 @@ it('opens evidence, shows a failed preview and requests fresh access on retry', 
   await fireEvent.press(view.getByText('View image'));
   await waitFor(() => expect(api.reporterEvidenceAccess).toHaveBeenCalledTimes(2));
   expect(api.reporterEvidenceAccess).toHaveBeenLastCalledWith(9, 10);
+});
+
+it('submits an address while a location fix is pending and ignores the late fix', async () => {
+  let finish!: (value: any) => void;
+  jest.mocked(Location.requestForegroundPermissionsAsync).mockResolvedValue({ status: 'granted' } as any);
+  jest.mocked(Location.getCurrentPositionAsync).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  jest.mocked(api.createIncident).mockResolvedValue({ id: 12 } as any);
+  const view = await render(wrap(<ReportScreen />));
+  await fireEvent.press(view.getByText('Use current location'));
+  await waitFor(() => expect(Location.getCurrentPositionAsync).toHaveBeenCalled());
+  await fireEvent.changeText(view.getByLabelText('Incident address'), '11 North Street');
+  expect(view.getByText('Confirm and submit report')).toBeEnabled();
+  await fireEvent.press(view.getByText('Confirm and submit report'));
+  await waitFor(() => expect(api.createIncident).toHaveBeenCalledWith(expect.objectContaining({ address: '11 North Street' }), expect.any(String), expect.any(AbortSignal)));
+  await act(async () => finish({ coords: { latitude: 18, longitude: 73, accuracy: 5 } }));
+  expect(view.queryByText(/Location captured/)).toBeNull();
+});
+
+it('renews live grants by server lifetime despite clock skew and stops when expiry cannot extend', async () => {
+  jest.useFakeTimers();
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(0);
+  try {
+    const grant = { url: '/live?grant=fixture', expires_at: '2026-11-07T01:00:00Z', expires_in_seconds: 60 };
+    jest.mocked(api.liveCamera).mockResolvedValue(grant);
+    const view = await render(wrap(<LiveCamera propertyId={1} cameraId={2} enabled />));
+    await fireEvent.press(view.getByText('Start live video'));
+    expect(view.getByLabelText('Live camera video')).toBeTruthy();
+    await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+    expect(api.liveCamera).toHaveBeenCalledTimes(2);
+    expect(view.queryByLabelText('Live camera video')).toBeNull();
+    await act(async () => { await jest.advanceTimersByTimeAsync(300000); });
+    expect(api.liveCamera).toHaveBeenCalledTimes(2);
+  } finally { clock.mockRestore(); jest.useRealTimers(); }
 });

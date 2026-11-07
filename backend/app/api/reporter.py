@@ -65,6 +65,10 @@ async def login(body: LoginRequest, response: Response, session: AsyncSession = 
                 await session.flush()
         if user.subject != subject or not user.active:
             raise ApplicationError("INVALID_CREDENTIALS", "Unable to verify your identity.", 401)
+        # Also recovers local revocation after a remote password reset succeeded
+        # during a database outage. Do not issue a new session until both persist.
+        user.token_version += 1
+        await session.execute(update(UserDeviceToken).where(UserDeviceToken.user_id == user.id).values(active=False))
         token, expires = issue_token(user)
         await session.commit()
         return TokenResponse(access_token=token, expires_at=expires)
@@ -150,8 +154,13 @@ async def register_device(
     from app.services.expo_push import TOKEN
     if body.provider == 'expo' and not TOKEN.fullmatch(body.push_token):
         raise ApplicationError('INVALID_PUSH_TOKEN', 'Register a valid Expo device token.', 422)
-    await session.execute(update(UserDeviceToken).where(UserDeviceToken.user_id != user.id,
-        or_(UserDeviceToken.device_id == body.device_id, UserDeviceToken.push_token == body.push_token)).values(active=False))
+    # A client-supplied identifier/token is not proof of ownership of another
+    # account's registration. Handover requires that account's logout/revocation.
+    foreign = await session.scalar(select(UserDeviceToken.id).where(
+        UserDeviceToken.user_id != user.id, UserDeviceToken.active.is_(True),
+        or_(UserDeviceToken.device_id == body.device_id, UserDeviceToken.push_token == body.push_token)).limit(1))
+    if foreign is not None:
+        raise ApplicationError('DEVICE_IN_USE', 'Sign out of the previous account on this device before registering it.', 409)
     device = await session.scalar(select(UserDeviceToken).where(
         UserDeviceToken.user_id == user.id, UserDeviceToken.device_id == body.device_id
     ))
@@ -225,7 +234,7 @@ async def allowed_property(property_id: int = Query(ge=1), user: User = Depends(
 @router.post('/reporter/notifications/test', status_code=202)
 async def test_push(property_id: int = Depends(allowed_property), user: User = Depends(get_reporter),
                     session: AsyncSession = Depends(get_session)):
-    if get_settings().dispatch_notification_provider != 'expo':
+    if get_settings().dispatch_notification_provider not in {'expo', 'routing'}:
         raise ApplicationError('PUSH_NOT_CONFIGURED', 'Expo delivery is not enabled on this host.', 503)
     retry = await push_test_limiter.check(str(user.id))
     if retry:

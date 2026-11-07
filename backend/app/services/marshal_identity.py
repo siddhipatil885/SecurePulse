@@ -51,7 +51,7 @@ class IdentityDetails(BaseModel):
         if not re.fullmatch(r'[A-Z0-9 -]{5,32}', value):
             raise ValueError('Enter a valid government ID number.')
         # Aadhaar is not accepted through this photo-review flow.
-        if re.fullmatch(r'\d{12}', value.replace(' ', '')):
+        if re.fullmatch(r'\d{12}', re.sub(r'[ -]', '', value)):
             raise ValueError('Use a passport, driving licence or voter ID; do not enter an Aadhaar number.')
         return value
 
@@ -92,7 +92,7 @@ class IdentityVault:
 
     def save_photo(self, raw):
         try:
-            with Image.open(BytesIO(raw)) as image:
+            with Image.open(BytesIO(raw), formats=['JPEG', 'PNG']) as image:
                 if image.format not in {'JPEG', 'PNG'} or image.width * image.height > 20_000_000 or min(image.size) < 300:
                     raise ValueError()
                 image.load()

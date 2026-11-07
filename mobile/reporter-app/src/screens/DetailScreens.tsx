@@ -32,7 +32,7 @@ export function AlertDetailScreen() {
       <Notice>Severity: {event.severity} · Status: {event.status}</Notice>
       <Notice>{event.reason ?? 'No additional details provided.'}</Notice>
       {event.zone && <Notice>Zone: {event.zone}</Notice>}
-      <Notice>Review this detection before deciding whether an incident occurred. No marshal notification or dispatch is sent.</Notice>
+      <Notice>Review this detection before deciding whether an incident occurred. Owners can send marshal assignment offers below.</Notice>
       {event.alert_id && event.alert_status === 'ACTIVE' ? <>
         <PrimaryButton label={reviewing ? 'Reviewing…' : 'Confirm threat'} onPress={() => void review('CONFIRMED')} disabled={reviewing} />
         <PrimaryButton variant="secondary" label={reviewing ? 'Reviewing…' : 'Dismiss as false alarm'} onPress={() => void review('FALSE_ALARM')} disabled={reviewing} />

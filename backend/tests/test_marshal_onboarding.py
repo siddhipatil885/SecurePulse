@@ -75,7 +75,8 @@ async def test_incomplete_or_unsafe_submissions_are_rejected(factory, settings):
     await require_onboarding(factory)
     async with await make_client(factory, 1) as client:
         for invalid in [{**DETAILS, 'consent': False}, {**DETAILS, 'emergency_phone': DETAILS['phone']},
-                        {**DETAILS, 'date_of_birth': date.today().isoformat()}, {**DETAILS, 'id_number': '123456789012'}]:
+                        {**DETAILS, 'date_of_birth': date.today().isoformat()}, {**DETAILS, 'id_number': '123456789012'},
+                        {**DETAILS, 'id_number': '1234-5678-9012'}]:
             result = await client.post('/api/v1/marshal/onboarding', data={'details': json.dumps(invalid)}, files=files())
             assert result.status_code == 422
             assert invalid['id_number'] not in result.text
@@ -127,3 +128,51 @@ async def test_identity_upload_requires_https_and_production_disallows_http_exce
         settings.app_env = 'production'; settings.marshal_identity_insecure_test_mode = True
         assert (await client.post('/api/v1/marshal/onboarding', data={'details': json.dumps(DETAILS)}, files=files())).status_code == 426
     assert not IdentityVault(settings).root.exists()
+
+
+@pytest.mark.asyncio
+async def test_admin_export_audits_before_writing_and_removes_partial_exports(factory, settings, monkeypatch, tmp_path):
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+    from app.models import AuditRecord
+    from app.review_marshal import run
+    await require_onboarding(factory)
+    async with await make_client(factory, 1) as client:
+        assert (await client.post('/api/v1/marshal/onboarding', data={'details': json.dumps(DETAILS)}, files=files())).status_code == 201
+    monkeypatch.setattr('app.review_marshal.get_session_factory', lambda: factory)
+    monkeypatch.setattr('app.review_marshal.get_settings', lambda: settings)
+    folder = tmp_path / 'export'
+    args = SimpleNamespace(approve=None, reject=None, inspect=1, reviewer='test-reviewer', output_dir=str(folder))
+    original = os.open
+    def fail_photo(path, *args, **kwargs):
+        if Path(path).name == 'portrait.jpg':
+            assert (folder / 'details.json').exists()
+            raise OSError('Injected write failure')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'open', fail_photo)
+    with pytest.raises(OSError):
+        await run(args)
+    assert not folder.exists()
+    async with factory() as session:
+        attempt = await session.scalar(select(AuditRecord).where(AuditRecord.action == 'MARSHAL_IDENTITY_ADMIN_EXPORT'))
+        assert attempt.details == {'status': 'STARTED'}
+    monkeypatch.setattr(os, 'open', original)
+    await run(args)
+    assert (folder / 'portrait.jpg').exists()
+    async with factory() as session:
+        rows = (await session.scalars(select(AuditRecord).where(AuditRecord.action == 'MARSHAL_IDENTITY_ADMIN_EXPORT').order_by(AuditRecord.id))).all()
+        assert [row.details['status'] for row in rows] == ['STARTED', 'COMPLETED']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,expired,expected', [('OFFERED', True, 204), ('OFFERED', False, 409), ('ACCEPTED', True, 409)])
+async def test_withdrawal_uses_offer_deadlines_but_keeps_accepted_work_blocked(factory, settings, status, expired, expected):
+    from datetime import datetime, timedelta, timezone
+    from app.models import Assignment
+    async with factory() as session:
+        session.add(Assignment(property_id=1, security_event_id=1, marshal_profile_id=1, status=status,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=-1 if expired else 1), idempotency_key='withdrawal-offer'))
+        await session.commit()
+    async with await make_client(factory, 1) as client:
+        assert (await client.delete('/api/v1/marshal/onboarding')).status_code == expected

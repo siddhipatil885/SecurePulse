@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def postgres_schema():
+def postgres_schema(request):
     url = Settings().database_url
     schema = "securepulse_test_" + uuid4().hex
     assert re.fullmatch(r"securepulse_test_[0-9a-f]{32}", schema)
@@ -47,8 +47,9 @@ def postgres_schema():
             connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
             config = Config("alembic.ini")
             config.attributes["connection"] = connection
-            command.upgrade(config, "head")
-            expected_revision = ScriptDirectory.from_config(config).get_current_head()
+            revision = getattr(request, 'param', 'head')
+            command.upgrade(config, revision)
+            expected_revision = ScriptDirectory.from_config(config).get_current_head() if revision == 'head' else revision
             actual_revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
@@ -168,6 +169,7 @@ async def test_concurrent_update_replays_return_the_exact_incident(database):
         ) == 1
 
 
+@pytest.mark.parametrize('postgres_schema', ['0009_event_camera_cascade'], indirect=True)
 def test_populated_forward_and_reverse_migration(postgres_schema):
     _, schema, engine = postgres_schema
     with engine.begin() as connection:
@@ -177,7 +179,7 @@ def test_populated_forward_and_reverse_migration(postgres_schema):
         config.attributes["connection"] = connection
         command.downgrade(config, "0007_align_legacy")
         assert connection.scalar(text("SELECT confdeltype FROM pg_constraint WHERE conrelid = 'security_events'::regclass AND conname = 'fk_security_events_camera_id_cameras'")) == "a"
-        command.upgrade(config, "head")
+        command.upgrade(config, "0009_event_camera_cascade")
         assert connection.scalar(text("SELECT confdeltype FROM pg_constraint WHERE conrelid = 'security_events'::regclass AND conname = 'fk_security_events_camera_id_cameras'")) == "c"
         assert connection.scalar(text("SELECT count(*) FROM cameras")) == before
 

@@ -243,7 +243,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.notification_provider = fake_provider
             notification_worker = NotificationDispatcher(session_factory, fake_provider,
                 worker_id="local-fake-provider") if fake_provider is not None else None
-            if settings.dispatch_notification_provider == 'expo':
+            external_worker = None
+            if settings.dispatch_notification_provider in {'expo', 'routing'}:
                 notification_worker = ExpoPushWorker(session_factory, settings.expo_push_access_token)
             if settings.dispatch_notification_provider == "routing":
                 routing_provider = AlertRoutingProvider(
@@ -264,13 +265,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         settings.emergency_ambulance_webhook_url,
                     )) else None,
                 )
-                notification_worker = ExternalAlertDispatcher(session_factory, routing_provider)
+                external_worker = ExternalAlertDispatcher(session_factory, routing_provider)
 
             while True:
                 try:
                     await timeout_worker.run_once()
                     if notification_worker is not None:
                         await notification_worker.run_once()
+                    if external_worker is not None:
+                        await external_worker.run_once()
                 except Exception:
                     logger.exception("Dispatch worker iteration failed")
 

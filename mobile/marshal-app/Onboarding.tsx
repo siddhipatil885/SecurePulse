@@ -7,7 +7,7 @@ type Request = (path: string, body?: unknown, token?: string | null, method?: st
 const initial = { legal_name: '', date_of_birth: '', phone: '', address: '', id_type: 'DRIVING_LICENCE', id_number: '', emergency_name: '', emergency_phone: '', emergency_relationship: 'spouse', consent: false, emergency_contact_informed: false };
 const identities = [['DRIVING_LICENCE', 'Driving licence'], ['PASSPORT', 'Passport'], ['VOTER_ID', 'Voter ID']] as const;
 
-export function Onboarding({ status, origin, token, request, refresh, signOut, close }: { status: string; origin: string; token: string; request: Request; refresh: () => Promise<void>; signOut: () => Promise<void>; close?: () => void }) {
+export function Onboarding({ status, origin, token, request, refresh, signOut, close, unauthorized }: { status: string; origin: string; token: string; request: Request; refresh: () => Promise<unknown>; signOut: () => Promise<void>; close?: () => void; unauthorized: (token: string) => Promise<void> }) {
   const [step, setStep] = useState(0);
   const [details, setDetails] = useState(initial);
   const [assets, setAssets] = useState<Record<string, Asset>>({});
@@ -38,9 +38,17 @@ export function Onboarding({ status, origin, token, request, refresh, signOut, c
     if (!assets.portrait || !assets.id_front) throw new Error('Add a clear face photo and your government ID photo.');
     const form = new FormData(); form.append('details', JSON.stringify(details));
     Object.entries(assets).forEach(([key, asset]) => form.append(key, asset as unknown as Blob));
-    const response = await fetch(`${origin}/api/v1/marshal/onboarding`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
-    if (!response.ok) { const result = await response.json().catch(() => null); throw new Error(result?.error?.message || 'Submission failed. Check your connection and try again.'); }
-    setDetails(initial); setAssets({}); setSummary({ status: 'PENDING' }); await refresh();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch(`${origin}/api/v1/marshal/onboarding`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form, signal: controller.signal });
+      if (response.status === 401) { await unauthorized(token); throw new Error('Please sign in again.'); }
+      if (!response.ok) { const result = await response.json().catch(() => null); throw new Error(result?.error?.message || 'Submission failed. Check your connection and try again.'); }
+      setDetails(initial); setAssets({}); setSummary({ status: 'PENDING' }); await refresh();
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') throw new Error('Upload timed out. Reconnect and check your status before retrying.');
+      throw e;
+    } finally { clearTimeout(timeout); }
   }
   function next() {
     if (step === 0 && (!details.legal_name.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(details.date_of_birth) || !details.phone || details.address.trim().length < 10)) { setError('Complete your name, birth date (YYYY-MM-DD), phone and address.'); return; }

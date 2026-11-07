@@ -23,6 +23,12 @@ export function AssignMarshal({ propertyId, source, incidentId, status }: { prop
   }, [candidates.data]);
   const active = assignment.data && ['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(assignment.data.status);
   const dispatchable = ['OPEN', 'ACKNOWLEDGED', 'RECEIVED', 'DISPATCHING', 'ESCALATED'].includes(status);
+  useEffect(() => {
+    if (source === 'camera' && assignment.isSuccess) {
+      void client.invalidateQueries({ queryKey: ['event', state.profile?.id, propertyId, incidentId] });
+      void client.invalidateQueries({ queryKey: ['events', state.profile?.id, propertyId] });
+    }
+  }, [assignment.data?.status, assignment.isSuccess, client, source, state.profile?.id, propertyId, incidentId]);
   async function assign() {
     setBusy(true); setError(null);
     const ids = [...selected].sort((a, b) => a - b);
@@ -32,6 +38,8 @@ export function AssignMarshal({ propertyId, source, incidentId, status }: { prop
       await api.assignMarshals(propertyId, source, incidentId, ids, retryKey.current.key);
       retryKey.current = null; setChoosing(false); setSelected([]);
       await assignment.refetch();
+      await client.invalidateQueries({ queryKey: ['event', state.profile?.id, propertyId, incidentId] });
+      await client.invalidateQueries({ queryKey: ['events', state.profile?.id, propertyId] });
       await client.invalidateQueries({ queryKey: ['reporter-incident'] });
       await client.invalidateQueries({ queryKey: ['reporter-incidents'] });
     } catch (e) {

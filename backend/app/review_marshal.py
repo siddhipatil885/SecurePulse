@@ -3,6 +3,7 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import json
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,17 +49,29 @@ async def run(args):
                 raise ValueError('--inspect requires --output-dir and --reviewer. Files contain private personal data.')
             vault = IdentityVault(get_settings())
             folder = Path(args.output_dir).resolve()
-            folder.mkdir(parents=True, exist_ok=False, mode=0o700)
-            # Explicit administrator export only. Nothing is written to app media storage.
-            import os
-            for name, content in [('details.json', json.dumps(vault.details(record.encrypted_details), indent=2).encode()),
-                                  *[(kind + '.jpg', vault.photo(reference)) for kind, reference in record.documents.items()]]:
-                with os.fdopen(os.open(folder / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as target:
-                    target.write(content)
-            session.add(AuditRecord(property_id=profile.property_id, actor_subject='administrator:' + args.reviewer,
+            attempt = AuditRecord(property_id=profile.property_id, actor_subject='administrator:' + args.reviewer,
                 action='MARSHAL_IDENTITY_ADMIN_EXPORT', resource_type='marshal_onboarding', resource_id=str(profile.id),
-                correlation_id=uuid4().hex, details={}))
+                correlation_id=uuid4().hex, details={'status': 'STARTED'})
+            session.add(attempt)
             await session.commit()
+            created = False
+            try:
+                folder.mkdir(parents=True, exist_ok=False, mode=0o700)
+                created = True
+                # Explicit administrator export only; never use app media storage.
+                import os
+                for name, content in [('details.json', json.dumps(vault.details(record.encrypted_details), indent=2).encode()),
+                                      *[(kind + '.jpg', vault.photo(reference)) for kind, reference in record.documents.items()]]:
+                    with os.fdopen(os.open(folder / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as target:
+                        target.write(content)
+                attempt.details = {'status': 'COMPLETED'}
+                await session.commit()
+            except BaseException:
+                if created:
+                    shutil.rmtree(folder)
+                # The committed STARTED record remains if completion cannot persist.
+                await session.rollback()
+                raise
             print('Private review files exported to:', folder)
         else:
             rows = (await session.execute(select(MarshalProfile.id, MarshalProfile.verification_status,

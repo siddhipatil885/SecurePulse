@@ -92,6 +92,14 @@ async def report(property_id: int, source: CaseSource, source_id: int,
     service = CaseService(session)
     incident = await service.detail(property_id, source, source_id)
     timeline_page = await service.timeline(property_id, source, source_id, 1, 100)
+    timeline = list(timeline_page.items)
+    page = 1
+    while len(timeline) < timeline_page.total:
+        page += 1
+        next_page = await service.timeline(property_id, source, source_id, page, 100)
+        if not next_page.items:
+            raise ApplicationError('REPORT_CHANGED', 'Incident history changed while generating the report. Retry.', 409)
+        timeline.extend(next_page.items)
     evidence_page = await service.evidence(property_id, source, source_id, 1, 100)
     assignments = list((await session.scalars(
         select(Assignment).where(
@@ -102,13 +110,10 @@ async def report(property_id: int, source: CaseSource, source_id: int,
     outboxes = list((await session.scalars(
         select(NotificationOutbox).where(
             NotificationOutbox.property_id == property_id,
+            NotificationOutbox.security_event_id == source_id if source == 'camera'
+            else NotificationOutbox.payload['reporter_incident_id'].as_integer() == source_id,
         ).order_by(NotificationOutbox.created_at, NotificationOutbox.id)
     )).all())
-    outboxes = [
-        row for row in outboxes
-        if (row.security_event_id == source_id if source == "camera"
-            else (row.payload or {}).get("reporter_incident_id") == source_id)
-    ]
     notification_rows = []
     for row in outboxes:
         attempts = list((await session.scalars(
@@ -124,7 +129,7 @@ async def report(property_id: int, source: CaseSource, source_id: int,
         ))
     occurred_at = incident.occurred_at
     resolved_at = next(
-        (item.occurred_at for item in reversed(timeline_page.items)
+        (item.occurred_at for item in reversed(timeline)
          if item.status in {"RESOLVED", "CLOSED", "COMPLETED"}),
         None,
     )
@@ -133,7 +138,7 @@ async def report(property_id: int, source: CaseSource, source_id: int,
     return IncidentReport(
         generated_at=datetime.now(timezone.utc),
         incident=incident,
-        timeline=timeline_page.items,
+        timeline=timeline,
         evidence=evidence_page.items,
         assignments=[OfferView.model_validate(item) for item in assignments],
         notifications=notification_rows,

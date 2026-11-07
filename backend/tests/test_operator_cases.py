@@ -275,6 +275,50 @@ async def test_database_prevents_duplicate_active_manual_offers_and_invalid_sour
             await session.flush()
 
 
+@pytest.mark.parametrize('source', ['camera', 'reporter'])
+async def test_duplicate_pending_offers_for_same_marshal_are_rejected(site, source):
+    _, factory = site
+    async with factory() as session:
+        for key in ['pending-first', 'pending-duplicate']:
+            session.add(Assignment(property_id=1, marshal_profile_id=1, status='OFFERED',
+                security_event_id=1 if source == 'camera' else None,
+                reporter_incident_id=1 if source == 'reporter' else None,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5), idempotency_key=key))
+            if key == 'pending-first':
+                await session.flush()
+            else:
+                with pytest.raises(IntegrityError):
+                    await session.flush()
+                await session.rollback()
+
+
+@pytest.mark.parametrize('source', ['camera', 'reporter'])
+async def test_case_report_uses_complete_history_and_only_incident_notifications(site, source):
+    client, factory = site
+    await login(client)
+    async with factory() as session:
+        item = await session.get(SecurityEvent if source == 'camera' else ReporterIncident, 1)
+        started = item.timestamp if source == 'camera' else item.created_at
+        for index in range(1, 126):
+            status = 'RESOLVED' if index == 125 else 'ACKNOWLEDGED'
+            when = started + timedelta(seconds=index)
+            row = IncidentStatusHistory(security_event_id=1, new_status=status, actor_subject='test',
+                reason='Test history', correlation_id=f'full-history-{index}', occurred_at=when) if source == 'camera' else ReporterIncidentTimeline(
+                    incident_id=1, status=status, actor_subject='test', message='Test history', occurred_at=when)
+            session.add(row)
+        for id in [1, 2]:
+            for kind in ['CAMERA', 'REPORTER']:
+                session.add(NotificationOutbox(property_id=1, security_event_id=id if kind == 'CAMERA' else None,
+                    kind=kind, dedupe_key=f'report-{kind}-{id}', payload={} if kind == 'CAMERA' else {'reporter_incident_id': id}))
+        await session.commit()
+    result = await client.get(CASES + f'/{source}/1/report')
+    assert result.status_code == 200, result.text
+    report = result.json()
+    assert len(report['timeline']) == 126
+    assert report['metrics']['response_duration_seconds'] == 125
+    assert [row['kind'] for row in report['notifications']] == [source.upper()]
+
+
 async def test_case_updates_are_published_only_to_the_authorized_property(site):
     client, _ = site
     await login(client)

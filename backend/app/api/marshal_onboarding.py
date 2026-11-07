@@ -113,8 +113,9 @@ async def document(kind: str, request: Request, user: User = Depends(get_reporte
 async def withdraw(user: User = Depends(get_reporter), session: AsyncSession = Depends(get_session)):
     profile = await profile_for(user, session)
     await session.refresh(profile, with_for_update=True)
+    from app.services.dispatch_service import DispatchService
     active = await session.scalar(select(Assignment.id).where(Assignment.marshal_profile_id == profile.id,
-        Assignment.status.in_(['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'])).limit(1))
+        DispatchService._capacity_filter(datetime.now(timezone.utc))).limit(1))
     if active:
         raise ApplicationError('ACTIVE_ASSIGNMENT', 'Contact your dispatcher to close active assignments before withdrawing.', 409)
     record = await session.get(MarshalOnboarding, profile.id)

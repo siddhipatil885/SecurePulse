@@ -67,7 +67,7 @@ class CaseService:
         summary = self.summary(item, source, assignment)
         destination_latitude = getattr(item, "latitude", None)
         destination_longitude = getattr(item, "longitude", None)
-        if assignment and assignment.status in ACTIVE_ASSIGNMENTS:
+        if assignment and assignment.status in {'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'}:
             availability = await self.session.get(MarshalAvailability, assignment.marshal_profile_id)
             if availability and availability.location_updated_at and availability.latitude is not None and availability.longitude is not None:
                 eta_fields = {}

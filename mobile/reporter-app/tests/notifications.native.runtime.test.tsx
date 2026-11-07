@@ -11,7 +11,9 @@ jest.mock('../src/auth/AuthProvider', () => ({
   api: { notificationPreferences: jest.fn() }, queryClient: { invalidateQueries: jest.fn() },
   useAuth: () => ({ state: { profile: { id: 1, properties: [] } }, selectProperty: jest.fn() }),
 }));
+const mockNativeImport = jest.fn();
 jest.mock('expo-notifications', () => {
+  mockNativeImport();
   throw new Error("Cannot find native module 'ExpoApplication'");
 });
 
@@ -20,5 +22,7 @@ it('keeps the bridge renderable when a native build is missing notification modu
 });
 
 it('provides a recoverable rebuild message for missing native notification modules', async () => {
+  mockNativeImport.mockClear();
   await expect(loadNotifications()).rejects.toThrow('Rebuild and reinstall');
+  expect(mockNativeImport).toHaveBeenCalled();
 });

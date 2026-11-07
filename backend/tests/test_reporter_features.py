@@ -19,6 +19,90 @@ def upstream(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
+async def test_password_reset_retries_local_revocation_after_provider_success(fixture, monkeypatch):
+    from app.api.account_recovery import reset_password, RecoveryPassword
+    from sqlalchemy.exc import SQLAlchemyError
+    client, factory, settings = fixture
+    provider = SimpleNamespace(public_operation=AsyncMock(return_value={}))
+    monkeypatch.setattr('app.api.account_recovery.NeonAuth', lambda: provider)
+    async with factory() as session:
+        session.add(User(id=3, subject='neon:managed', email='managed@example.test'))
+        await session.flush()
+        session.add(UserDeviceToken(user_id=3, device_id='reset-device', push_token='ExpoPushToken[reset]', provider='expo'))
+        await session.commit()
+        commit = session.commit
+        calls = 0
+        async def flaky_commit():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SQLAlchemyError('temporary database failure')
+            await commit()
+        monkeypatch.setattr(session, 'commit', flaky_commit)
+        await reset_password(RecoveryPassword(email='managed@example.test', code='123456', new_password='Replacement-password123'), session)
+    provider.public_operation.assert_awaited_once()
+    async with factory() as session:
+        assert (await session.get(User, 3)).token_version == 1
+        from sqlalchemy import select
+        assert not (await session.scalar(select(UserDeviceToken).where(UserDeviceToken.user_id == 3))).active
+
+
+@pytest.mark.asyncio
+async def test_managed_signin_completes_reset_revocation_after_persistent_database_failure(fixture, monkeypatch):
+    from app.api.account_recovery import reset_password, RecoveryPassword
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy import select
+    client, factory, settings = fixture
+    settings.neon_auth_base_url = 'https://auth.example.test/auth'
+    monkeypatch.setattr('app.api.reporter.get_settings', lambda: settings)
+    provider = SimpleNamespace(public_operation=AsyncMock(return_value={}),
+        signin=AsyncMock(return_value={'id': 'managed', 'email': 'managed@example.test'}))
+    monkeypatch.setattr('app.api.account_recovery.NeonAuth', lambda: provider)
+    monkeypatch.setattr('app.api.reporter.NeonAuth', lambda: provider)
+    async with factory() as session:
+        session.add(User(id=3, subject='neon:managed', email='managed@example.test'))
+        await session.flush()
+        session.add(UserDeviceToken(user_id=3, device_id='reset-device', push_token='ExpoPushToken[reset]', provider='expo'))
+        await session.commit()
+        monkeypatch.setattr(session, 'execute', AsyncMock(side_effect=SQLAlchemyError('database unavailable')))
+        with pytest.raises(ApplicationError) as error:
+            await reset_password(RecoveryPassword(email='managed@example.test', code='123456', new_password='Replacement-password123'), session)
+        assert error.value.status_code == 503
+    result = await client.post('/api/v1/auth/login', json={'email': 'managed@example.test', 'password': 'Replacement-password123'})
+    assert result.status_code == 200
+    async with factory() as session:
+        assert (await session.get(User, 3)).token_version == 1
+        assert not (await session.scalar(select(UserDeviceToken).where(UserDeviceToken.user_id == 3))).active
+
+
+@pytest.mark.asyncio
+async def test_device_registration_cannot_deactivate_another_accounts_device(fixture):
+    client, factory, _ = fixture
+    owner = {'Authorization': 'Bearer ' + await sign_in(client)}
+    other = {'Authorization': 'Bearer ' + await sign_in(client, 'reporter@example.test')}
+    original = {'device_id': 'owner-device', 'push_token': 'ExpoPushToken[owner]', 'provider': 'expo'}
+    assert (await client.post('/api/v1/reporter/devices', json=original, headers=owner)).status_code == 204
+    for body in [{**original, 'device_id': 'attacker-device'}, {**original, 'push_token': 'ExpoPushToken[attacker]'}]:
+        assert (await client.post('/api/v1/reporter/devices', json=body, headers=other)).status_code == 409
+    assert (await client.post('/api/v1/auth/logout', headers=owner)).status_code == 204
+    assert (await client.post('/api/v1/reporter/devices', json=original, headers=other)).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_prefixed_go2rtc_playlists_normalize_resources_and_keep_origin_checks(fixture, monkeypatch):
+    from app.api.reporter_live import rewrite_playlist
+    _, _, settings = fixture
+    settings.go2rtc_url = 'https://camera.example/proxy/go2rtc'
+    claims = {'aud': 'reporter-live', 'exp': 9999999999}
+    for uri in ['hls/playlist.m3u8?id=a', '/proxy/go2rtc/api/hls/playlist.m3u8?id=a', '/api/hls/playlist.m3u8?id=a']:
+        result = rewrite_playlist('#EXTM3U\n' + uri, '/api/stream.m3u8', 1, claims, settings)
+        resource = parse_qs(urlsplit(result.splitlines()[1]).query)['resource'][0]
+        assert resource == '/api/hls/playlist.m3u8?id=a'
+    with pytest.raises(ApplicationError):
+        rewrite_playlist('#EXTM3U\nhttps://evil.example/api/hls/playlist.m3u8', '/api/stream.m3u8', 1, claims, settings)
+
+
+@pytest.mark.asyncio
 async def test_native_hls_rewrites_segments_and_rejects_tampering_and_revocation(fixture, monkeypatch):
     client, factory, settings = fixture
     settings.go2rtc_url = 'http://go2rtc.test'

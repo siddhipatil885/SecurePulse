@@ -71,7 +71,11 @@ async def sign_in(client, email="owner@example.test"):
 
 
 @pytest.mark.asyncio
-async def test_login_profile_scoped_reads_and_redaction(fixture):
+async def test_login_profile_scoped_reads_and_redaction(fixture, monkeypatch):
+    from unittest.mock import AsyncMock
+    async def unknown_states(cameras, settings):
+        return {camera.id: 'unknown' for camera in cameras}
+    monkeypatch.setattr('app.api.reporter.camera_states', AsyncMock(side_effect=unknown_states))
     client, _, _ = fixture
     token = await sign_in(client)
     headers = {"Authorization": f"Bearer {token}"}

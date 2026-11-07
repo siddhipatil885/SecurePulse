@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.core.dependencies import get_session
@@ -73,8 +74,19 @@ async def verify_email(body: RecoveryCode):
 @router.post('/reset', dependencies=[Depends(enabled)])
 async def reset_password(body: RecoveryPassword, session: AsyncSession = Depends(get_session)):
     await verify_operation('/email-otp/reset-password', {'email': body.email, 'otp': body.code, 'password': body.new_password})
-    ids = select(User.id).where(User.email == body.email, User.subject.like('neon:%'))
-    await session.execute(update(UserDeviceToken).where(UserDeviceToken.user_id.in_(ids)).values(active=False))
-    await session.execute(update(User).where(User.email == body.email, User.subject.like('neon:%')).values(token_version=User.token_version + 1))
-    await session.commit()
+    # The OTP is consumed by the provider. Retry local revocation independently,
+    # without attempting a second remote password reset.
+    for attempt in range(3):
+        try:
+            ids = select(User.id).where(User.email == body.email, User.subject.like('neon:%'))
+            await session.execute(update(UserDeviceToken).where(UserDeviceToken.user_id.in_(ids)).values(active=False))
+            await session.execute(update(User).where(User.email == body.email, User.subject.like('neon:%')).values(token_version=User.token_version + 1))
+            await session.commit()
+            break
+        except SQLAlchemyError:
+            await session.rollback()
+            if attempt == 2:
+                # Managed sign-in always completes both local revocations before
+                # issuing a JWT, including after a restart or prolonged outage.
+                raise ApplicationError('RESET_REVOCATION_PENDING', 'Your password was reset. Sign in with the new password to finish ending previous sessions; retry sign-in if the server is unavailable.', 503) from None
     return {'message': 'Password reset. Sign in with your new password. Older administrator-managed accounts need administrator assistance.'}

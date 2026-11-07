@@ -18,18 +18,28 @@ function Player({ uri, failed }: { uri: string; failed: () => void }) {
 
 export function LiveCamera({ propertyId, cameraId, enabled }: { propertyId: number; cameraId: number; enabled: boolean }) {
   const focused = useIsFocused();
-  const [grant, setGrant] = useState<{ url: string; expires_at: string } | null>(null);
+  const [grant, setGrant] = useState<{ url: string; expires_at: string; refreshAfterMs: number } | null>(null);
+  const lastExpiry = useRef(0);
+  const renewals = useRef(0);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const generation = useRef(0);
   const stop = useCallback(() => { generation.current++; setGrant(null); setBusy(false); }, []);
-  const start = useCallback(async () => {
+  const start = useCallback(async (automatic = false) => {
     if (!enabled || !focused) return;
     const attempt = ++generation.current;
     setBusy(true); setError('');
     try {
+      if (!automatic) { lastExpiry.current = 0; renewals.current = 0; }
+      else if (++renewals.current > 12) throw new Error('Reopen live video to continue watching.');
       if (!serverUrl) throw new Error('Configure the camera host address first.');
+      const requestedAt = performance.now();
       const next = await api.liveCamera(propertyId, cameraId);
-      if (attempt === generation.current) setGrant({ ...next, url: serverUrl + next.url });
+      const remainingMs = next.expires_in_seconds * 1000 - (performance.now() - requestedAt);
+      if (remainingMs <= 30000 || Date.parse(next.expires_at) <= lastExpiry.current) throw new Error('Live access cannot be extended. Sign in again and reopen the camera.');
+      if (attempt === generation.current) {
+        lastExpiry.current = Date.parse(next.expires_at);
+        setGrant({ ...next, url: serverUrl + next.url, refreshAfterMs: remainingMs - 30000 });
+      }
     } catch (error) { if (attempt === generation.current) { setGrant(null); setError(error instanceof Error ? error.message : 'Unable to open live video.'); } }
     finally { if (attempt === generation.current) setBusy(false); }
   }, [propertyId, cameraId, enabled, focused]);
@@ -40,7 +50,7 @@ export function LiveCamera({ propertyId, cameraId, enabled }: { propertyId: numb
   }, [stop]);
   useEffect(() => {
     if (!grant) return;
-    const timer = setTimeout(() => { void start(); }, Math.max(1000, Date.parse(grant.expires_at) - Date.now() - 30000));
+    const timer = setTimeout(() => { void start(true); }, grant.refreshAfterMs);
     return () => clearTimeout(timer);
   }, [grant, start]);
   const failed = useCallback(() => { stop(); setError('Live playback failed. Confirm the host is reachable and the camera supports H.264/H.265 HLS, then retry.'); }, [stop]);

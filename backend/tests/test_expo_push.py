@@ -102,3 +102,50 @@ async def test_transient_push_failure_is_bounded(factory):
         assert (await session.get(NotificationOutbox, row_id)).status == 'EXHAUSTED'
         from sqlalchemy import func
         assert await session.scalar(select(func.count()).select_from(NotificationAttempt)) == 5
+
+
+@pytest.mark.asyncio
+async def test_large_delivery_batches_preserve_successful_tickets_on_partial_failure(factory):
+    row_id = await seed(factory)
+    async with factory() as session:
+        session.add_all([UserDeviceToken(user_id=1, device_id=f'device-{i}', provider='expo',
+            push_token=f'ExpoPushToken[device-{i}]') for i in range(204)])
+        await session.commit()
+    sends = []
+    fail_once = True
+    def handler(request):
+        nonlocal fail_once
+        body = json.loads(request.content)
+        if request.url.path.endswith('/getReceipts'):
+            return httpx.Response(200, json={'data': {key: {'status': 'ok'} for key in body['ids']}})
+        sends.append([item['to'] for item in body])
+        assert len(body) <= 100
+        if len(sends) == 2 and fail_once:
+            fail_once = False
+            return httpx.Response(503)
+        return httpx.Response(200, json={'data': [{'status': 'ok', 'id': item['to']} for item in body]})
+    worker = ExpoPushWorker(factory, transport=httpx.MockTransport(handler))
+    await worker.run_once()
+    await due(factory, row_id); await worker.run_once()
+    assert [len(batch) for batch in sends] == [100, 100, 100, 5]
+    assert set(sends[0]).isdisjoint(set(sends[2] + sends[3]))
+    await due(factory, row_id); await worker.run_once()
+    async with factory() as session:
+        assert (await session.get(NotificationOutbox, row_id)).status == 'SENT'
+
+
+@pytest.mark.asyncio
+async def test_expo_and_external_workers_claim_disjoint_destinations(factory):
+    from app.services.dispatch_workers import ExternalAlertDispatcher, RecordingFakeProvider
+    row_id = await seed(factory)
+    async with factory() as session:
+        external = NotificationOutbox(property_id=1, kind='INCIDENT_EXTERNAL_ALERT',
+            destination='sms:+15550010', dedupe_key='external-only')
+        session.add(external); await session.commit(); external_id = external.id
+    worker = ExpoPushWorker(factory, transport=httpx.MockTransport(lambda request: httpx.Response(200,
+        json={'data': [{'status': 'ok', 'id': 'ticket'}]})))
+    assert await worker.run_once() == 1
+    assert await ExternalAlertDispatcher(factory, RecordingFakeProvider()).run_once() == 1
+    async with factory() as session:
+        assert (await session.get(NotificationOutbox, row_id)).status == 'PENDING'
+        assert (await session.get(NotificationOutbox, external_id)).status == 'SENT'

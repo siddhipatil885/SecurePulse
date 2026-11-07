@@ -27,25 +27,29 @@ export function ReportScreen() {
   const [location, setLocation] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
   const [attachment, setAttachment] = useState<{ uri: string; name: string; type: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const locationRequest = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const submission = useRef(new ReportSubmission(api)).current;
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => { controller.current?.abort(); }, []);
+  useEffect(() => () => { controller.current?.abort(); locationRequest.current++; }, []);
 
   async function useCurrentLocation() {
-    if (busy) return;
-    setBusy(true); setError(null);
+    if (busy || locating) return;
+    const attempt = ++locationRequest.current;
+    setLocating(true); setError(null);
     try {
     const permission = await Location.requestForegroundPermissionsAsync();
+    if (attempt !== locationRequest.current) return;
     if (permission.status !== 'granted') {
       setError('Location permission was denied. Enter the incident address instead.');
       return;
     }
     const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    if (submission.started) return;
+    if (submission.started || attempt !== locationRequest.current) return;
     setLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy ?? undefined });
-    } catch { setError('Unable to read your location. Enter the address instead.'); }
-    finally { setBusy(false); }
+    } catch { if (attempt === locationRequest.current) setError('Unable to read your location. Enter the address instead.'); }
+    finally { if (attempt === locationRequest.current) setLocating(false); }
   }
   async function chooseEvidence() {
     if (busy) return;
@@ -98,7 +102,8 @@ export function ReportScreen() {
     <Text style={ui.heading}>Where did it happen?</Text>
     <TextInput accessibilityLabel="Incident address" editable={!busy && !submission.started} style={ui.input} maxLength={1000} placeholder="Enter the incident address" placeholderTextColor="#64748b"
       value={address} onChangeText={setAddress} />
-    <PrimaryButton disabled={busy || submission.started} variant="secondary" label={location ? `Location captured (${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)})` : 'Use current location'} onPress={() => void useCurrentLocation()} />
+    <PrimaryButton disabled={busy || submission.started || locating} variant="secondary" label={locating ? 'Finding location…' : location ? `Location captured (${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)})` : 'Use current location'} onPress={() => void useCurrentLocation()} />
+    {locating && <PrimaryButton variant="secondary" label="Cancel location request" onPress={() => { locationRequest.current++; setLocating(false); }} />}
     <Text style={ui.heading}>Evidence (optional)</Text>
     <PrimaryButton disabled={busy} variant="secondary" label={attachment ? `Attached: ${attachment.name}` : 'Choose photo or video'} onPress={() => void chooseEvidence()} />
     {attachment && <PrimaryButton variant="secondary" label="Remove attachment" disabled={busy} onPress={() => { if (submission.started) submission.setAttachment(null); setAttachment(null); }} />}

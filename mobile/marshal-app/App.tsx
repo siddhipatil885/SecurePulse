@@ -81,7 +81,7 @@ function Marshal() {
     const [nextWorkspace, active, past] = await Promise.all([request('marshal/workspace'), request('marshal/assignments'), request('marshal/assignments?history=true')]);
     const detail = selectedRef.current ? await request(`marshal/assignments/${selectedRef.current}`) : null;
     if (current !== generation.current || revision !== refreshRevision.current) return;
-    if (nextWorkspace.verification_status !== 'APPROVED') dutyRef.current = false;
+    dutyRef.current = nextWorkspace.verification_status === 'APPROVED' && nextWorkspace.on_duty && nextWorkspace.available;
     setWorkspace(nextWorkspace); setJobs(active.items);
     setHistory(previous => historyPageRef.current > 1
       ? [...past.items, ...previous.filter(job => !past.items.some((latest: Job) => latest.id === job.id))]
@@ -89,9 +89,10 @@ function Marshal() {
     if (historyPageRef.current === 1) setMoreHistory(past.items.length === 20);
     if (detail && selectedRef.current === detail.id) setSelected(detail);
     setSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    return nextWorkspace as Workspace;
   }
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<unknown>) {
     setBusy(true); setError(null);
     try { await action(); } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
     finally { setBusy(false); }
@@ -103,7 +104,9 @@ function Marshal() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.origin === origin && Date.parse(parsed.session.expires_at) > Date.now()) {
-          await request('marshal/workspace', undefined, parsed.session.access_token);
+          const fresh: Workspace = await request('marshal/workspace', undefined, parsed.session.access_token);
+          dutyRef.current = fresh.verification_status === 'APPROVED' && fresh.on_duty && fresh.available;
+          setWorkspace(fresh);
           setSession(parsed.session);
         } else await SecureStore.deleteItemAsync(storageKey);
       }
@@ -118,8 +121,8 @@ function Marshal() {
       if (!active || AppState.currentState !== 'active') return;
       if (Date.parse(session.expires_at) <= Date.now()) { await clearSession(); return; }
       try {
-        await refresh();
-        if (dutyRef.current && workspace?.property_id) await request('dispatch/marshal/availability', { property_id: workspace.property_id, on_duty: true, available: true }, undefined, 'PUT');
+        const fresh = await refresh();
+        if (active && dutyRef.current && fresh?.on_duty && fresh.available) await request('dispatch/marshal/availability', { property_id: fresh.property_id, on_duty: fresh.on_duty, available: fresh.available }, undefined, 'PUT');
         if (active) setError(null);
       } catch (e) { if (active) setError(e instanceof Error ? e.message : 'Unable to refresh.'); }
     };
@@ -142,7 +145,7 @@ function Marshal() {
         setError('Location permission is required to share your live position during an active assignment.');
         return;
       }
-      subscription = await Location.watchPositionAsync(
+      const nextSubscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.Balanced, timeInterval: 5000, distanceInterval: 10 },
         location => {
           if (!active) return;
@@ -150,11 +153,13 @@ function Marshal() {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
             accuracy_m: location.coords.accuracy,
-            heading: location.coords.heading,
-            speed_mps: location.coords.speed,
+            heading: location.coords.heading !== null && location.coords.heading < 0 ? null : location.coords.heading,
+            speed_mps: location.coords.speed !== null && location.coords.speed < 0 ? null : location.coords.speed,
           }).catch(() => undefined);
         },
       );
+      if (active) subscription = nextSubscription;
+      else nextSubscription.remove();
     })().catch(() => {
       if (active) setError('Unable to start live location sharing. Check device location settings.');
     });
@@ -212,7 +217,7 @@ function Marshal() {
   </ScrollView>;
 
   const pending = jobs.filter(job => job.status === 'OFFERED');
-  if (workspace && (showOnboarding || workspace.verification_status !== 'APPROVED')) return <Onboarding key={session.access_token} status={workspace.verification_status} origin={origin!} token={session.access_token} request={request} refresh={refresh} close={() => setShowOnboarding(false)} signOut={async () => { try { await request('auth/logout', {}); } finally { setShowOnboarding(false); await clearSession(); } }} />;
+  if (workspace && (showOnboarding || workspace.verification_status !== 'APPROVED')) return <Onboarding key={session.access_token} status={workspace.verification_status} origin={origin!} token={session.access_token} request={request} refresh={refresh} unauthorized={async failedToken => { if (failedToken === tokenRef.current) await clearSession(); }} close={() => setShowOnboarding(false)} signOut={async () => { try { await request('auth/logout', {}); } finally { setShowOnboarding(false); await clearSession(); } }} />;
   const active = jobs.filter(job => job.status !== 'OFFERED');
   return <View style={{ flex: 1 }}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void run(refresh).finally(() => setRefreshing(false)); }} />}>
     <View style={s.row}><View><Text style={s.eyebrow}>SECUREPULSE MARSHAL</Text><Text style={s.title}>{selected ? 'Your response' : tab === 'history' ? 'Past responses' : tab === 'account' ? 'Your account' : 'Let’s make a difference.'}</Text></View><View style={s.avatar}><Text style={{ fontWeight: '800', color: '#18332B' }}>QRT</Text></View></View>

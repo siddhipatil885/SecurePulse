@@ -31,6 +31,31 @@ async def require_role(session: AsyncSession, user_id: int, property_id: int,
     return membership
 
 
+async def can_view_assignment_location(principal, property_id, assignment_id, session):
+    if not principal.can_access_property(property_id):
+        return False
+    assignment = await session.get(Assignment, assignment_id)
+    if not assignment or assignment.property_id != property_id or assignment.status not in {'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'}:
+        return False
+    if principal.subject.startswith('reporter:'):
+        try:
+            user = await session.get(User, int(principal.subject.removeprefix('reporter:')))
+        except ValueError:
+            return False
+    else:
+        user = await session.scalar(select(User).where(User.subject == principal.subject))
+    if not user or not user.active:
+        return False
+    try:
+        membership = await require_role(session, user.id, property_id, {'owner', 'dispatcher', 'marshal'})
+    except ApplicationError:
+        return False
+    if membership.role in {'owner', 'dispatcher'}:
+        return True
+    profile = await session.get(MarshalProfile, assignment.marshal_profile_id)
+    return bool(profile and profile.active and profile.user_id == user.id)
+
+
 @router.get("/eligible-marshals", response_model=list[EligibleMarshal])
 async def eligible_marshals(property_id: int = Query(ge=1), user: User = Depends(get_reporter),
                              session: AsyncSession = Depends(get_session)):

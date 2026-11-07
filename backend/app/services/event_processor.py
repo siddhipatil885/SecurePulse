@@ -386,25 +386,19 @@ class EventProcessor:
                 )
             )
             if event.severity in {"HIGH", "CRITICAL"}:
-                for destination in self.alert_routing_destinations:
-                    digest = hashlib.sha256(
-                        f"{incident_key}:{destination}".encode()
-                    ).hexdigest()
-                    await self._add(NotificationOutbox(
-                        property_id=event.property_id,
-                        security_event_id=event.id,
-                        kind="INCIDENT_EXTERNAL_ALERT",
-                        destination=destination,
-                        dedupe_key=f"incident:{digest}:external",
-                        status="PENDING",
-                        payload={
-                            "incident_id": event.id,
-                            "camera_id": event.camera_id,
-                            "severity": event.severity,
-                            "event_type": event.event_type,
-                            "reason": event.reason,
-                        },
-                    ))
+                await self._queue_external_alerts(event)
+
+    async def _queue_external_alerts(self, event):
+        incident_key = event.incident_key or str(event.id)
+        for destination in dict.fromkeys(self.alert_routing_destinations):
+            digest = hashlib.sha256(f"{incident_key}:{destination}".encode()).hexdigest()
+            key = f"incident:{digest}:external"
+            if await self.session.scalar(select(NotificationOutbox.id).where(NotificationOutbox.dedupe_key == key)) is not None:
+                continue
+            await self._add(NotificationOutbox(property_id=event.property_id, security_event_id=event.id,
+                kind='INCIDENT_EXTERNAL_ALERT', destination=destination, dedupe_key=key, status='PENDING',
+                payload={'incident_id': event.id, 'camera_id': event.camera_id, 'severity': event.severity,
+                         'event_type': event.event_type, 'reason': event.reason}))
 
     async def _apply_correlated_decision(
         self,
@@ -453,6 +447,8 @@ class EventProcessor:
                      "reason": decision.reason,
                      "policy_version": decision.metadata.get("policy_version")}))
         if incident.severity in {"HIGH", "CRITICAL"}:
+            if previous_severity not in {'HIGH', 'CRITICAL'}:
+                await self._queue_external_alerts(incident)
             await self._add(Alert(camera_id=incident.camera_id,
                 security_event_id=incident.id, severity=incident.severity, status="ACTIVE"))
         return True

@@ -50,9 +50,13 @@ def rewrite_playlist(text, current_resource, camera_id, claims, settings):
     def replace(uri):
         target = urlsplit(urljoin(base + current_resource, uri))
         origin = urlsplit(base)
-        if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or target.path not in ALLOWED:
+        path = target.path
+        prefix = origin.path.rstrip('/')
+        if prefix and path.startswith(prefix + '/'):
+            path = path[len(prefix):]
+        if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or path not in ALLOWED:
             raise ApplicationError('INVALID_PLAYLIST', 'The camera returned an unsupported playlist.', 502)
-        resource = target.path + ('?' + target.query if target.query else '')
+        resource = path + ('?' + target.query if target.query else '')
         return signed_url(camera_id, resource, claims, settings)
     lines = []
     for line in text.splitlines():
@@ -78,7 +82,8 @@ async def access(camera_id: int, property_id: int = Query(ge=1), user: User = De
     resource = '_root'
     claims = {'aud': 'reporter-live', 'sub': f'reporter:{user.id}', 'user_id': user.id,
               'ver': user.token_version, 'camera_id': camera.id, 'property_id': property_id, 'exp': int(expires.timestamp())}
-    return {'url': signed_url(camera.id, resource, claims, settings), 'expires_at': expires.isoformat()}
+    return {'url': signed_url(camera.id, resource, claims, settings), 'expires_at': expires.isoformat(),
+            'expires_in_seconds': max(0, deadline - datetime.now(timezone.utc).timestamp())}
 
 
 @router.get('/{camera_id}/live')
@@ -100,6 +105,7 @@ async def live(camera_id: int, resource: str = Query(max_length=2048), grant: st
     camera = await authorized_camera(camera_id, claims['property_id'], user, session)
     if resource == '_root':
         resource = '/api/stream.m3u8?' + urlencode({'src': camera.frigate_camera_name, 'mp4': ''})
+    await session.close()
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
             async with client.stream('GET', settings.go2rtc_url.rstrip('/') + resource) as response:

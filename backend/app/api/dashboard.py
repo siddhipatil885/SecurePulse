@@ -304,7 +304,14 @@ async def stream(websocket: WebSocket, property_id: int):
     async def authorize():
         async with get_session_factory()() as session:
             user = await get_reporter(credentials=credentials, session=session)
-            await property_access(property_id, user, session)
+            return await property_access(property_id, user, session)
+
+    async def authorize_location(target_property, assignment_id):
+        from app.api.dispatch import can_view_assignment_location
+        async with get_session_factory()() as session:
+            user = await get_reporter(credentials=credentials, session=session)
+            principal = await property_access(property_id, user, session)
+            return await can_view_assignment_location(principal, target_property, assignment_id, session)
 
     queue = None
     disconnect_task = None
@@ -313,7 +320,7 @@ async def stream(websocket: WebSocket, property_id: int):
     try:
         await authorize()
         await websocket.accept()
-        queue = await publisher.subscribe(frozenset({property_id}))
+        queue = await publisher.subscribe(frozenset({property_id}), location_access=authorize_location)
         async def wait_for_disconnect():
             while True:
                 if (await websocket.receive())["type"] == "websocket.disconnect":
@@ -331,7 +338,10 @@ async def stream(websocket: WebSocket, property_id: int):
                 await websocket.send_json({"type": "heartbeat"})
                 continue
             await authorize()
-            await websocket.send_json(message_task.result())
+            message = message_task.result()
+            if message.get('type') == 'marshal_location' and not await authorize_location(message['property_id'], message['data']['assignment_id']):
+                continue
+            await websocket.send_json(message)
     except ApplicationError:
         try:
             await websocket.close(code=1008)

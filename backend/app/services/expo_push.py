@@ -74,12 +74,13 @@ class ExpoPushWorker:
             NotificationPreference.user_id == User.id).where(User.id.in_(candidates), User.active.is_(True),
             Property.id == row.property_id, Property.active.is_(True), PropertyMembership.active.is_(True),
             NotificationPreference.category == category, NotificationPreference.enabled.is_(True),
-            UserDeviceToken.active.is_(True), UserDeviceToken.provider == 'expo').distinct().limit(101))).all()
+            UserDeviceToken.active.is_(True), UserDeviceToken.provider == 'expo').distinct())).all()
         return devices, category
 
     async def run_once(self, limit=25):
         async with self.factory() as session, session.begin():
-            rows = await OutboxRepository(session).claim_batch('expo-push', datetime.now(timezone.utc), limit)
+            rows = await OutboxRepository(session).claim_batch('expo-push', datetime.now(timezone.utc), limit,
+                exclude_destination_prefixes=('sms:', 'voice:', 'whatsapp:', 'emergency:'))
             ids = [row.id for row in rows]
         for row_id in ids:
             try:
@@ -95,9 +96,6 @@ class ExpoPushWorker:
             if not row or row.status != 'PROCESSING':
                 return
             devices, category = await self.recipients(session, row)
-            if len(devices) > 100:
-                row.status = 'EXHAUSTED'
-                return
             if row.kind == 'INCIDENT_OPENED' and row.security_event_id:
                 event = await session.get(SecurityEvent, row.security_event_id)
                 if event and (event.event_type == 'DETECTION' or event.severity == 'INFO'):
@@ -125,9 +123,13 @@ class ExpoPushWorker:
             tickets = {v['ticket']: key for key, v in state.items() if v.get('status') == 'ticket'}
             try:
                 if tickets:
-                    receipts = await self.api('getReceipts', {'ids': list(tickets)})
-                    if not isinstance(receipts, dict):
-                        raise ValueError('Invalid receipt response')
+                    receipts = {}
+                    ticket_ids = list(tickets)
+                    for offset in range(0, len(ticket_ids), 1000):
+                        batch = await self.api('getReceipts', {'ids': ticket_ids[offset:offset + 1000]})
+                        if not isinstance(batch, dict):
+                            raise ValueError('Invalid receipt response')
+                        receipts.update(batch)
                     for ticket, key in tickets.items():
                         receipt = receipts.get(ticket)
                         if not receipt:
@@ -151,16 +153,18 @@ class ExpoPushWorker:
                         'sound': 'default', 'channelId': 'security-updates',
                         'data': {'kind': kind, 'id': report_id or event_id, 'property_id': row.property_id,
                                  'user_id': device_map[key].user_id, 'category': category}} for key in pending]
-                    results = await self.api('send', messages)
-                    if isinstance(results, dict) and len(pending) == 1:
-                        results = [results]
-                    if not isinstance(results, list) or len(results) != len(pending) or not all(isinstance(item, dict) for item in results):
-                        raise ValueError('Invalid ticket response')
-                    for key, result in zip(pending, results):
-                        if result.get('status') == 'ok' and isinstance(result.get('id'), str):
-                            state[key].update(status='ticket', ticket=result['id'], submitted_at=now.timestamp())
-                        else:
-                            self.failed_device(device_map[key], state[key], result)
+                    for offset in range(0, len(messages), 100):
+                        batch = messages[offset:offset + 100]
+                        results = await self.api('send', batch)
+                        if isinstance(results, dict) and len(batch) == 1:
+                            results = [results]
+                        if not isinstance(results, list) or len(results) != len(batch) or not all(isinstance(item, dict) for item in results):
+                            raise ValueError('Invalid ticket response')
+                        for key, result in zip(pending[offset:offset + 100], results):
+                            if result.get('status') == 'ok' and isinstance(result.get('id'), str):
+                                state[key].update(status='ticket', ticket=result['id'], submitted_at=now.timestamp())
+                            else:
+                                self.failed_device(device_map[key], state[key], result)
                     receipt = NotificationAttempt(outbox_id=row.id, attempt_number=attempts + 1,
                         provider='expo', status='ACCEPTED', attempted_at=now, response_metadata={'devices': state})
                     session.add(receipt)

@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -c "import PIL; assert int(PIL.__version__.split('.')[0]) >= 13"
 
 COPY . .
 
