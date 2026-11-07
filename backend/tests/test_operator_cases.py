@@ -319,6 +319,23 @@ async def test_case_report_uses_complete_history_and_only_incident_notifications
     assert [row['kind'] for row in report['notifications']] == [source.upper()]
 
 
+@pytest.mark.parametrize('source', ['camera', 'reporter'])
+async def test_download_report_includes_evidence_beyond_the_first_page(site, source):
+    client, factory = site
+    await login(client)
+    async with factory() as session:
+        for index in range(105):
+            session.add(Evidence(event_id=1, type='SNAPSHOT', file_path=f'private-{index}.jpg', timestamp=datetime.now(timezone.utc))
+                if source == 'camera' else ReporterIncidentEvidence(incident_id=1, media_type='image/jpeg',
+                    file_path=f'private-{index}.jpg', original_filename=f'photo-{index}.jpg', byte_size=100))
+        await session.commit()
+    result = await client.get(CASES + f'/{source}/1/report')
+    assert result.status_code == 200, result.text
+    assert len(result.json()['evidence']) == 106
+    assert len({row['id'] for row in result.json()['evidence']}) == 106
+    assert 'file_path' not in result.text and 'private-' not in result.text
+
+
 async def test_case_updates_are_published_only_to_the_authorized_property(site):
     client, _ = site
     await login(client)

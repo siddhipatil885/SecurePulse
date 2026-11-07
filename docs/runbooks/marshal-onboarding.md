@@ -26,6 +26,16 @@ the key makes existing data unreadable; key rotation needs an explicit re-encryp
 procedure. Keep both settings backend-only. Docker deployments must mount the
 private directory and pass both settings before onboarding is enabled there.
 
+The canonical Compose deployment passes `MARSHAL_IDENTITY_KEY` from its private
+`backend/deployment/.env` and fixes `MARSHAL_IDENTITY_ROOT` at
+`/var/lib/securepulse/marshal-identities/documents`. The separate
+`marshal_identities` named volume persists that folder across backend container
+replacement. The application creates the `documents` child with private
+permissions. Identity storage is never mounted into the dashboard or a media
+server. Back up this volume together with the onboarding database records and
+the separately protected encryption key. Preserve the existing Compose project
+name and volumes; `docker compose down -v` deletes the documents.
+
 Identity submissions require HTTPS in both the native form and backend. The
 current HTTP LAN address can show the form but cannot submit personal documents.
 Serve the existing backend through an authenticated HTTPS deployment/reverse

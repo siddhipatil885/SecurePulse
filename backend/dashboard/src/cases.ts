@@ -2,6 +2,12 @@ export type CaseSource = 'camera' | 'reporter';
 export interface Assignment {
   id: number; status: string; marshal_profile_id: number; version: number;
   offered_at: string; expires_at: string; accepted_at: string | null; closed_at: string | null;
+  responder_location?: {
+    latitude: number; longitude: number; accuracy_m: number | null;
+    heading: number | null; speed_mps: number | null; updated_at: string;
+    distance_m?: number | null; eta_seconds?: number | null;
+    eta_source?: 'gps_speed' | 'urban_fallback' | null;
+  } | null;
 }
 export interface CaseSummary {
   key: string; source: CaseSource; source_id: number; property_id: number;

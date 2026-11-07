@@ -36,10 +36,14 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
   const path = casePath(propertyId, selected);
   const [data, setData] = useState<{ detail: CaseDetail; timeline: Page<TimelineItem>; evidence: Page<CaseEvidence>; assignments: Page<Assignment>; marshals: Marshal[] } | null>(null);
   const [error, setError] = useState(''); const [actionError, setActionError] = useState(''); const [success, setSuccess] = useState('');
+  const [clock, setClock] = useState(Date.now);
+  const [reportBusy, setReportBusy] = useState(false);
+  const reportRequest = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
   const [busy, setBusy] = useState(false); const [revision, setRevision] = useState(0);
   const [timelinePage, setTimelinePage] = useState(1); const [evidencePage, setEvidencePage] = useState(1); const [assignmentPage, setAssignmentPage] = useState(1);
   const [action, setAction] = useState(''); const [reason, setReason] = useState(''); const [marshalId, setMarshalId] = useState('');
-  const [expiry, setExpiry] = useState(60);
+  const [expiry, setExpiry] = useState(300);
   const actionRequest = useRef<{ signature: string; key: string } | null>(null);
   const offerRequest = useRef<{ signature: string; key: string } | null>(null);
   useEffect(() => {
@@ -58,6 +62,11 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
     }).catch(error => { if (!abort.signal.aborted) setError(message(error)); });
     return () => abort.abort();
   }, [path, propertyId, timelinePage, evidencePage, assignmentPage, revision, refreshVersion]);
+  useEffect(() => {
+    mounted.current = true;
+    const timer = window.setInterval(() => setClock(Date.now()), 5000);
+    return () => { mounted.current = false; window.clearInterval(timer); reportRequest.current?.abort(); };
+  }, []);
   function requestKey(ref: typeof actionRequest, signature: string) {
     if (ref.current?.signature !== signature) ref.current = { signature, key: crypto.randomUUID() };
     return ref.current.key;
@@ -73,6 +82,7 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
           correlation_id: requestKey(actionRequest, JSON.stringify(intent)) }) });
         setSuccess(`Incident updated to ${result.status}.`); setReason(''); actionRequest.current = null;
       } else if (kind === 'offer') {
+        if (!Number.isInteger(expiry) || expiry < 10 || expiry > 300) throw new Error('Choose an offer timeout between 10 and 300 seconds.');
         const intent = { marshal_profile_id: Number(marshalId), expires_in_seconds: expiry };
         await request(`${path}/offers`, { method: 'POST', body: JSON.stringify({ ...intent,
           idempotency_key: requestKey(offerRequest, JSON.stringify(intent)) }) });
@@ -87,9 +97,37 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
     } catch (error) { setActionError(message(error)); }
     finally { setBusy(false); setRevision(value => value + 1); }
   }
+  async function downloadReport() {
+    if (!data || reportRequest.current) return;
+    const controller = new AbortController();
+    reportRequest.current = controller;
+    setReportBusy(true); setActionError('');
+    const timeout = window.setTimeout(() => controller.abort(), 30000);
+    try {
+      const report = await request<unknown>(`${path}/report`, { signal: controller.signal });
+      if (controller.signal.aborted || !mounted.current) return;
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = `property-${propertyId}-${selected.source}-incident-${selected.source_id}-report.json`;
+      document.body.append(link);
+      try { link.click(); }
+      finally { link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    } catch (error) {
+      if (mounted.current) setActionError(controller.signal.aborted ? 'Report download timed out. Please try again.' : message(error));
+    } finally {
+      window.clearTimeout(timeout); reportRequest.current = null;
+      if (mounted.current) setReportBusy(false);
+    }
+  }
   const detail = data?.detail;
   const assignment = detail?.latest_assignment;
   const active = assignment && ['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(assignment.status);
+  const tracking = assignment && ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(assignment.status);
+  const position = tracking ? assignment.responder_location : null;
+  const validPosition = position && Number.isFinite(position.latitude) && Math.abs(position.latitude) <= 90 && Number.isFinite(position.longitude) && Math.abs(position.longitude) <= 180;
+  const locationAge = position ? clock - Date.parse(position.updated_at) : NaN;
+  const recentPosition = clock > 0 && Number.isFinite(locationAge) && locationAge >= -5000 && locationAge <= 30000;
   return <section className="incident-panel incident-detail" aria-label="Incident details">
     <h2>{selected.source === 'camera' ? 'Camera incident' : 'Reported incident'} #{selected.source_id}</h2>
     {!data && !error && <p role="status">Loading incident…</p>}
@@ -102,18 +140,35 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
         {detail.camera_id !== null && <><dt>Camera</dt><dd>#{detail.camera_id}</dd></>}
         {detail.confidence !== null && <><dt>Confidence</dt><dd>{Math.round(detail.confidence * 100)}%</dd></>}
         <dt>Details</dt><dd>{detail.description || 'No additional details'}</dd></dl>
+      {tracking && <aside aria-label="Responder location">
+        <h3>Responder location</h3>
+        {position && validPosition ? <>
+          <p role="status">{recentPosition ? 'Location updated recently' : 'Location is stale or its update time is unavailable. Showing the last reported position.'}</p>
+          <p>{position.latitude.toFixed(5)}, {position.longitude.toFixed(5)}</p>
+          <p>Last update: {Number.isFinite(Date.parse(position.updated_at)) ? date(position.updated_at) : 'Unavailable'}</p>
+          {position.accuracy_m != null && <p>Reported accuracy: ±{Math.round(position.accuracy_m)} metres</p>}
+          {recentPosition && position.eta_seconds != null && <>
+            <p>Estimated arrival: {position.eta_seconds < 60 ? 'Under 1 min' : `${Math.ceil(position.eta_seconds / 60)} min`}
+              {position.distance_m != null ? ` · ${(position.distance_m / 1000).toFixed(2)} km` : ''}</p>
+            <p>Estimate uses the reported position; traffic is not included.</p>
+          </>}
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${position.latitude},${position.longitude}`)}`} target="_blank" rel="noopener noreferrer">Open reported position in maps</a>
+        </> : <p role="status">Waiting for the responder to share a location.</p>}
+      </aside>}
       {detail.allowed_actions.length > 0 && <form onSubmit={event => void mutate('action', event)} aria-label="Incident actions"><fieldset disabled={busy}>
         <h3>Update incident</h3><label>Action<select aria-label="Action" value={action} onChange={e => setAction(e.target.value)}>
           {detail.allowed_actions.map(item => <option key={item} value={item}>{item === 'dismiss' ? 'Dismiss as false alarm' : item.charAt(0).toUpperCase() + item.slice(1)}</option>)}
-        </select></label><label>Reason<textarea required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
+        </select></label><label>Reason<textarea aria-label="Reason" required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
         <button disabled={busy || !reason.trim()} type="submit">{busy ? 'Saving…' : 'Confirm action'}</button>
       </fieldset></form>}
       <h3>Dispatch</h3>{assignment ? <p>Assignment #{assignment.id} · {assignment.status} · Marshal #{assignment.marshal_profile_id}</p> : <p>No assignment exists for this incident.</p>}
+      <button disabled={busy || reportBusy} onClick={() => void downloadReport()}>{reportBusy ? 'Preparing report…' : 'Download incident report'}</button>
+      <p>The JSON report includes timeline, notes, notification history and evidence references. Historical GPS is not recorded.</p>
       {active && <button disabled={busy} onClick={() => void mutate('cancel')}>Cancel assignment</button>}
       {detail.dispatch_allowed && (data.marshals.length ? <form onSubmit={event => void mutate('offer', event)} aria-label="Dispatch assignment"><fieldset disabled={busy}>
         <label>Marshal<select aria-label="Marshal" required value={marshalId} onChange={e => setMarshalId(e.target.value)}>
           {data.marshals.map(item => <option key={item.id} value={item.id}>{item.name || `Marshal #${item.id}`} · {item.service_area || 'Property service area'}</option>)}
-        </select></label><label>Offer timeout (seconds)<input aria-label="Offer timeout (seconds)" required type="number" min={10} max={3600} value={expiry} onChange={e => setExpiry(Number(e.target.value))} /></label>
+        </select></label><label>Offer timeout (seconds)<input aria-label="Offer timeout (seconds)" required type="number" min={10} max={300} step={1} value={expiry} onChange={e => setExpiry(Number(e.target.value))} /></label>
         <button disabled={busy || !marshalId} type="submit">Offer assignment</button>
       </fieldset></form> : <p>No eligible marshal is currently available. Availability must be current and capacity free.</p>)}
       <h3>History</h3>{data.timeline.items.length ? <ol className="history-list">{data.timeline.items.map(item => <li key={item.key}>

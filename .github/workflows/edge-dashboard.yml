@@ -25,7 +25,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run lint
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
         env:
           DASHBOARD_TEST_PYTHON: python

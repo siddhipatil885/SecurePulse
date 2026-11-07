@@ -78,7 +78,7 @@ const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
           if (payload.type === 'person_tracks' && payload.data && Array.isArray(payload.data.tracks)) {
             const data = payload.data;
             setTracksByCamera(current => ({ ...current, [String(data.camera_id)]: data.tracks.map(mapTrack) }));
-          } else if (payload.type === 'security_event' || payload.type === 'case_updated') scheduleRefresh();
+          } else if (payload.type === 'security_event' || payload.type === 'case_updated' || payload.type === 'marshal_location') scheduleRefresh();
         } catch { scheduleRefresh(); }
       };
       socket.onerror = () => { if (active) setStreamConnected(false); };

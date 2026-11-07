@@ -158,6 +158,20 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       DASHBOARD_REGISTRATION_ENABLED: ${DASHBOARD_REGISTRATION_ENABLED:-true}
       DISPATCH_NOTIFICATION_PROVIDER: ${DISPATCH_NOTIFICATION_PROVIDER:-disabled}
+      EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+      ALERT_ROUTING_DESTINATIONS: ${ALERT_ROUTING_DESTINATIONS:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_SMS_FROM: ${TWILIO_SMS_FROM:-}
+      TWILIO_VOICE_FROM: ${TWILIO_VOICE_FROM:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      EMERGENCY_POLICE_WEBHOOK_URL: ${EMERGENCY_POLICE_WEBHOOK_URL:-}
+      EMERGENCY_FIRE_WEBHOOK_URL: ${EMERGENCY_FIRE_WEBHOOK_URL:-}
+      EMERGENCY_AMBULANCE_WEBHOOK_URL: ${EMERGENCY_AMBULANCE_WEBHOOK_URL:-}
+      EMERGENCY_WEBHOOK_SECRET: ${EMERGENCY_WEBHOOK_SECRET:-}
+      MARSHAL_IDENTITY_KEY: ${MARSHAL_IDENTITY_KEY:-}
+      # Keep the path inside the dedicated volume, outside served evidence.
+      MARSHAL_IDENTITY_ROOT: /var/lib/securepulse/marshal-identities/documents
       JWT_SECRET: ${JWT_SECRET:-}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       JWT_ISSUER: ${JWT_ISSUER:-}
@@ -172,6 +186,7 @@ services:
       # Camera media stays read-only; reporter attachments use separate storage.
       - ../frigate/media:/media/evidence/camera:ro
       - reporter_evidence:/media/evidence/reporter-incidents
+      - marshal_identities:/var/lib/securepulse/marshal-identities
     ports:
       - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-18000}:8000"
     depends_on:
@@ -186,6 +201,7 @@ services:
       retries: 10
 
 volumes:
+  marshal_identities:
   reporter_evidence:
   postgres_data:
   frigate_config:

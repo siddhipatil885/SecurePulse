@@ -101,6 +101,14 @@ async def report(property_id: int, source: CaseSource, source_id: int,
             raise ApplicationError('REPORT_CHANGED', 'Incident history changed while generating the report. Retry.', 409)
         timeline.extend(next_page.items)
     evidence_page = await service.evidence(property_id, source, source_id, 1, 100)
+    evidence = list(evidence_page.items)
+    page = 1
+    while len(evidence) < evidence_page.total:
+        page += 1
+        next_page = await service.evidence(property_id, source, source_id, page, 100)
+        if not next_page.items:
+            raise ApplicationError('REPORT_CHANGED', 'Incident evidence changed while generating the report. Retry.', 409)
+        evidence.extend(next_page.items)
     assignments = list((await session.scalars(
         select(Assignment).where(
             Assignment.property_id == property_id,
@@ -139,7 +147,7 @@ async def report(property_id: int, source: CaseSource, source_id: int,
         generated_at=datetime.now(timezone.utc),
         incident=incident,
         timeline=timeline,
-        evidence=evidence_page.items,
+        evidence=evidence,
         assignments=[OfferView.model_validate(item) for item in assignments],
         notifications=notification_rows,
         metrics={

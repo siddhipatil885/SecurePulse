@@ -119,6 +119,59 @@ health; unknown health is not reported as online. Cross-process durable replay
 and email verification/password reset are separate capabilities, not supplied by
 this dashboard change.
 
+## Responder position and incident downloads
+
+Owners and dispatchers can select an incident to see a responder's last reported
+position after acceptance, while the assignment is accepted, en route or on
+scene. Location events refresh the selected property automatically; periodic
+refresh provides a fallback when the socket reconnects. Pending offers and
+completed/cancelled assignments do not show responder positions.
+
+The panel shows the update time and reported accuracy. Updates older than 30
+seconds, invalid timestamps and timestamps unexpectedly ahead of the browser
+clock are labelled stale/unavailable. Arrival estimates are hidden in that
+state. Fresh estimates use straight-line distance and reported speed or a
+fallback, without traffic data. The maps link opens the last reported coordinate
+on an external map after the operator clicks it; there is no embedded route map
+or background GPS capture in this change.
+
+**Download incident report** saves a property/incident-named JSON file containing
+the full timeline, notes, evidence metadata, assignments and notification
+history. Evidence beyond the first 100 records is included. Media bytes and
+historical GPS are not embedded. Failed downloads can be retried; switching
+properties or signing out cancels a pending download. Offers default to 300
+seconds and the form accepts only 10–300 seconds, matching the backend.
+
+## Compose notification and identity settings
+
+Use the canonical `backend/deployment/docker-compose.yml` and its private
+`.env`. Delivery defaults to `DISPATCH_NOTIFICATION_PROVIDER=disabled`.
+Use `expo` for app push, or `routing` for app push plus explicitly configured
+SMS/voice/WhatsApp/agency destinations. The deployment passes the Expo token,
+Twilio credentials/senders, agency endpoints/signing secret and
+`ALERT_ROUTING_DESTINATIONS` to the backend only. Configure real provider
+credentials and approved receiving endpoints before selecting a live mode.
+No provider is enabled by populating an example file alone.
+
+Set a dedicated `MARSHAL_IDENTITY_KEY` before collecting onboarding data.
+Compose uses the `marshal_identities` volume and the fixed private root
+`/var/lib/securepulse/marshal-identities/documents`, separately from media.
+Preserve this volume, the database and its separate encryption-key backup when
+replacing containers. See [onboarding and review](marshal-onboarding.md) for
+HTTPS, administrator access and retention requirements.
+
+Validate configuration without printing secrets:
+
+```sh
+# From backend/deployment, using the existing project and private .env:
+docker compose config --quiet
+```
+
+After reviewing the resulting changes, rebuild/recreate only the backend in the
+verified existing project. Do not remove volumes or silently select a different
+project. This configuration change does not deploy an HTTPS proxy, create
+provider credentials or validate delivery to a real device or agency.
+
 ## Verification
 
 From `backend`:
@@ -134,7 +187,7 @@ From `backend/dashboard`:
 npm test
 npm run build
 npm run lint
-npx playwright install chromium
+npx playwright install chromium webkit
 npm run test:browser
 ```
 
@@ -148,3 +201,11 @@ Coverage includes registration/password confirmation, required property details,
 cookie sessions across reload/logout, delayed-response property switching,
 cross-property access denial, saved incident actions/history, evidence rendering,
 read-only restrictions, revoked sessions and adding an empty property.
+The response-tools suite also exercises marshal location updates through the
+authenticated API, realtime rendering, stale/missing positions, completed-job
+privacy, actual report downloads, failure/retry, property-switch cancellation
+and the five-minute offer limit in Chromium and WebKit.
+
+With Docker Compose CLI installed, backend tests also render the deployment with
+isolated test settings and check provider configuration and private named-volume
+wiring. These tests do not start containers or read the deployment `.env`.
