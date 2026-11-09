@@ -25,7 +25,7 @@ export interface TimelineItem {
 }
 export interface CaseEvidence {
   id: number; kind: string; media_type: string | null; original_filename: string | null;
-  byte_size: number | null; occurred_at: string;
+  byte_size: number | null; occurred_at: string; source?: 'incident' | 'marshal'; assignment_id?: number | null;
 }
 export interface Marshal { id: number; name: string | null; service_area: string | null; capacity: number }
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number }

@@ -115,6 +115,37 @@ neutral `run_once` workers; deployment code should invoke them from its existing
 job runner. Provider calls occur after the outbox claim transaction commits, and
 each result is persisted as an attempt receipt in a new transaction.
 
+Active marshals can publish a validated latest location with
+`POST /api/v1/marshal/assignments/{assignment_id}/location`. The endpoint
+requires the assigned marshal's authenticated session and an active assignment
+(`ACCEPTED`, `EN_ROUTE`, or `ON_SCENE`). The latest coordinate, accuracy,
+heading, speed, and timestamp are stored on the marshal availability record;
+assignment readers receive it only while the assignment is active.
+For manually reported incidents with coordinates, the owner projection also
+includes straight-line distance and a transparent ETA. The ETA uses current GPS
+speed when meaningful and an 8 m/s urban fallback otherwise; it is an estimate,
+not traffic-aware navigation. Camera incidents without coordinates expose live
+location but no fabricated ETA.
+
+### External alert routing
+
+The optional `routing` provider supports explicit `NotificationOutbox`
+destinations:
+
+- `sms:+<E.164 number>`
+- `voice:+<E.164 number>`
+- `whatsapp:+<E.164 number>`
+- `emergency:police`, `emergency:fire`, or `emergency:ambulance`
+
+SMS, voice, and WhatsApp use the configured Twilio account. Emergency
+destinations use signed HTTPS webhooks owned by the relevant agency or
+approved integration partner; this does not directly connect to public
+emergency services. Set `ALERT_ROUTING_DESTINATIONS` to a comma-separated
+allowlist to create external outbox work for new HIGH/CRITICAL camera
+incidents. Keep `DISPATCH_NOTIFICATION_PROVIDER=disabled` until credentials,
+agency endpoints, consent, and delivery acceptance are configured. Provider
+responses are recorded with bounded retries and idempotency keys.
+
 Provision marshal accounts with `--role marshal`; optional
 `--service-area` and `--max-active-assignments` arguments initialize eligibility.
 New marshals start off duty and unavailable and must publish availability before

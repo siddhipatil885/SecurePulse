@@ -45,7 +45,7 @@ export function IncidentDetailScreen() {
       {incident.description && <Notice>{incident.description}</Notice>}
       <Notice>Submitted {new Date(incident.created_at).toLocaleString()}</Notice>
       {incident.dispatch && <Notice>Response status: {incident.dispatch.status.replaceAll('_', ' ')}</Notice>}
-      <AssignMarshal key={`${incident.property_id}:${incident.id}`} propertyId={incident.property_id} source="reporter" incidentId={incident.id} status={incident.status} />
+      <AssignMarshal key={`${incident.property_id}:${incident.id}`} propertyId={incident.property_id} source="reporter" incidentId={incident.id} status={incident.status} destinationLatitude={incident.latitude} destinationLongitude={incident.longitude} destinationAddress={incident.address} />
       <Text style={ui.heading}>Timeline</Text>
       {incident.timeline.map(item => <Notice key={item.id}>{new Date(item.occurred_at).toLocaleString()} · {item.message}</Notice>)}
       <Text style={ui.heading}>Evidence</Text>

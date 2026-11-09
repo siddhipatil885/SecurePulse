@@ -3,11 +3,13 @@
 import asyncio
 import logging
 import queue
+from datetime import datetime, timedelta, timezone
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import delete
 
 from app.api.cameras import router as cameras_router
 from app.api.dispatch import router as dispatch_router
@@ -39,6 +41,7 @@ from app.services.alert_routing import (
     TwilioConfig,
 )
 from app.database.database import dispose_database, get_session_factory
+from app.models import MarshalLocationHistory
 from app.domain.events import DetectionEvent
 from app.integrations.local_security_engine import LocalSecurityEngine
 from app.integrations.security_engine import HttpSecurityEngine
@@ -237,6 +240,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         async def run_dispatch_workers() -> None:
             timeout_worker = TimeoutEscalator(session_factory)
+            next_location_cleanup = datetime.now(timezone.utc)
             # Preserve delivery intents by default. Recording a drill is opt-in
             # and must never silently mark a real notification as delivered.
             fake_provider = RecordingFakeProvider() if settings.dispatch_notification_provider == "recording-fake" else None
@@ -274,6 +278,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         await notification_worker.run_once()
                     if external_worker is not None:
                         await external_worker.run_once()
+                    now = datetime.now(timezone.utc)
+                    if now >= next_location_cleanup:
+                        async with session_factory() as session, session.begin():
+                            await session.execute(delete(MarshalLocationHistory).where(
+                                MarshalLocationHistory.recorded_at < now - timedelta(hours=24)))
+                        next_location_cleanup = now + timedelta(hours=1)
                 except Exception:
                     logger.exception("Dispatch worker iteration failed")
 

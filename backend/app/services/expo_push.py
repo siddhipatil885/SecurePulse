@@ -148,11 +148,20 @@ class ExpoPushWorker:
                     report_id = payload.get('reporter_incident_id')
                     event_id = row.security_event_id or payload.get('incident_id')
                     kind = 'reporter_incident' if report_id else 'camera_event' if event_id else 'home'
-                    messages = [{'to': device_map[key].push_token, 'title': 'SecurePulse update',
-                        'body': 'A security or response record has an update. Open the app to review it.',
-                        'sound': 'default', 'channelId': 'security-updates',
-                        'data': {'kind': kind, 'id': report_id or event_id, 'property_id': row.property_id,
-                                 'user_id': device_map[key].user_id, 'category': category}} for key in pending]
+                    is_assignment_offer = row.kind == 'ASSIGNMENT_OFFERED' and destination.startswith('marshal:')
+                    assignment_id = payload.get('assignment_id') if is_assignment_offer else None
+                    messages = [{
+                        'to': device_map[key].push_token,
+                        'title': 'New SecurePulse response' if is_assignment_offer else 'SecurePulse update',
+                        'body': (f'Assignment #{assignment_id} needs your response. Open SecurePulse now.'
+                                 if assignment_id else 'A security or response record has an update. Open the app to review it.'),
+                        'sound': 'assignment-alarm.wav' if is_assignment_offer else 'default',
+                        'channelId': 'dispatch-alerts' if is_assignment_offer else 'security-updates',
+                        'priority': 'high' if is_assignment_offer else 'default',
+                        'data': {'kind': kind, 'id': report_id or event_id, 'assignment_id': assignment_id,
+                                 'property_id': row.property_id, 'user_id': device_map[key].user_id,
+                                 'category': category},
+                    } for key in pending]
                     for offset in range(0, len(messages), 100):
                         batch = messages[offset:offset + 100]
                         results = await self.api('send', batch)

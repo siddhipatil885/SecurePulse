@@ -12,9 +12,12 @@ from app.models.marshal_onboarding import MarshalOnboarding
 from app.models.operations import (
     Assignment,
     AssignmentEvent,
+    AssignmentMessage,
     AuditRecord,
     IncidentStatusHistory,
     MarshalAvailability,
+    MarshalLocationHistory,
+    MarshalEvidence,
     MarshalProfile,
     NotificationAttempt,
     NotificationOutbox,
@@ -25,7 +28,8 @@ from app.models.operations import (
 
 __all__ = [
     "Alert", "Assignment", "AssignmentEvent", "AuditRecord", "Camera", "CameraHealthObservation", "Evidence",
-    "IncidentStatusHistory", "MarshalAvailability", "MarshalProfile", "MarshalOnboarding", "NotificationAttempt",
+    "IncidentStatusHistory", "MarshalAvailability", "MarshalLocationHistory", "MarshalEvidence", "MarshalProfile", "MarshalOnboarding", "NotificationAttempt",
+    "AssignmentMessage",
     "NotificationOutbox", "NotificationPreference", "Property", "PropertyMembership",
     "SecurityEvent", "UserDeviceToken",
     "ReporterIncident", "ReporterIncidentEvidence", "ReporterIncidentTimeline",

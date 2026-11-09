@@ -10,14 +10,19 @@
       "bundleIdentifier": "com.securepulse.marshal",
       "supportsTablet": false,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SecurePulse uses your location while you are responding to an active assignment."
+        "NSLocationWhenInUseUsageDescription": "SecurePulse shares your location with your dispatcher while you are responding to an active assignment.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SecurePulse shares your location with your dispatcher during an active response, including while the app is in the background.",
+        "UIBackgroundModes": ["location", "remote-notification"]
       }
     },
     "android": {
       "package": "com.securepulse.marshal",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "plugins": [
@@ -32,7 +37,17 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "SecurePulse uses your location while you are responding to an active assignment."
+          "locationWhenInUsePermission": "SecurePulse shares your location with your dispatcher while you are responding to an active assignment.",
+          "locationAlwaysAndWhenInUsePermission": "SecurePulse shares your location with your dispatcher during an active response, including while the app is in the background.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/assignment-alarm.wav"],
+          "enableBackgroundRemoteNotifications": true
         }
       ],
       "expo-asset",

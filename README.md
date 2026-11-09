@@ -4,9 +4,10 @@ SecurePulse connects camera detections to incident review, property-owner alerts
 and marshal response. It combines Frigate/MQTT, a FastAPI backend, PostgreSQL,
 a React command dashboard, and separate Expo apps for owners and marshals.
 
-**Status: 7 November 2026.** The core response workflow is implemented and tested
-in the repository. Real-camera, physical-phone and live-provider acceptance is
-still required before production sign-off. The complete PRD is not delivered.
+**Status: 9 November 2026.** Core incident response features are implemented in
+the current working tree. Real-camera, physical-phone and live-provider
+acceptance is still required before production sign-off. The complete PRD is
+not delivered.
 
 ## What is done
 
@@ -16,37 +17,35 @@ still required before production sign-off. The complete PRD is not delivered.
 | Camera pipeline | Frigate MQTT parsing, event normalization, database deduplication, anonymous person-track updates, camera health, and protected live-view/evidence access. |
 | Security rules | Person detection, restricted-zone entry, loitering, line crossing and multiple-person rules, with confidence, score, severity and reason. Real-world accuracy still needs validation. |
 | Owner app | Expo SDK 58 login, property selection, cameras/live viewing, detection review, incident reporting with optional image/video attachments, history and marshal assignment controls. |
-| Dispatch | Duty/availability/capacity checks, five-minute offers, multiple selected recipients, first-acceptance locking, competing-offer cancellation, timeout/escalation handling and assignment history. |
-| Marshal app | Separate SDK 58 app with onboarding, duty controls, assigned jobs, accept/decline, external-map navigation, incident-photo viewing, notes and response progress. Incoming offers beep/vibrate while foregrounded. |
+| Dispatch | Duty/availability/capacity checks, five-minute offers, distance-ranked selection when incident coordinates exist, multi-marshal team offers, backup requests, task labels, first-acceptance locking for broadcasts, timeout/escalation handling and assignment history. |
+| Marshal app | Separate SDK 58 app with onboarding, duty controls, assigned jobs, accept/decline, external-map navigation, incident and field photo/video viewing, capture/upload, team chat, notes, task splitting and response progress. |
 | Marshal onboarding | Government-ID details/photos, portrait, personal and emergency contacts, consent, encrypted storage, manual administrator approval, duty gating and withdrawal. Passport, driving licence and voter ID are supported; Aadhaar is excluded from this manual flow. |
-| Command dashboard | Property-scoped incident queue, filters, evidence, timeline, status actions, assignment/cancellation, and authenticated realtime updates with polling fallback. |
-| Responder position | Foreground location submission for the selected active job. The dashboard shows accepted responders' last reported coordinates, accuracy, update time, stale-data labels, map links and basic arrival estimates. |
-| Incident downloads | JSON reports with the full timeline, notes, evidence metadata, assignments and notification history. Downloads support retry, timeout and cancellation on navigation; evidence beyond the first page is included. |
-| Notification infrastructure | Owner-app Expo registration, outbox delivery, tickets/receipts and notification taps; SMS, voice, WhatsApp and agency-webhook adapters. Live operation requires configured credentials and acceptance tests. |
-| Deployment foundations | Canonical Compose stack, migrations through `0020`, health checks, host handoff/recovery scripts, provider-setting passthrough, and a dedicated persistent volume for encrypted identity documents. |
+| Command dashboard | Property-scoped incident queue, filters, incident and marshal evidence, timeline, status actions, supervisor review, assignment/cancellation, team chat, and authenticated realtime updates with polling fallback. |
+| Responder position | Active-job foreground/background location capture and up to 24 hours of assignment-scoped history. Owner mobile shows the recent route and current location; the dashboard shows latest position, age, distance and ETA. Physical-device cadence and background behavior remain to be verified; capture requests updates at 15 seconds/20 metres. |
+| Incident downloads | On-demand JSON reports with the full timeline, notes, evidence metadata, assignments and notification history. Automatic closure reports, media bundles, GPS history and printable/shareable exports remain. |
+| Notification infrastructure | Owner and marshal Expo registration, outbox delivery, receipts and notification taps; SMS, voice, WhatsApp and agency-webhook adapters. Live operation requires configured credentials and device acceptance. |
+| Deployment foundations | Canonical Compose stack, migrations through `0023`, health checks, host handoff/recovery scripts, provider-setting passthrough, and a dedicated persistent volume for encrypted identity documents. |
 
 The current marshal workflow is:
 
 ```text
-Onboarding → Administrator approval → On duty → Offer
-Accept → En route → On scene → Notes → Completed
+Onboarding → Administrator approval → On duty → Offer / team invite
+Accept → En route → Arrived → Investigating → Supervisor review → Closed
 Decline / Expiry → Dispatcher follow-up or configured retry
 ```
 
-Multiple offers produce **one accepted responder**, not a multi-person response
-team. `ON_SCENE` currently covers arrival and investigation; completion resolves
-the incident.
+Broadcast offers use first acceptance. Team offers let several responders
+accept, coordinate in a shared chat, and take task labels. Supervisors approve
+the investigation before the incident is resolved.
 
 ## What is left to build
 
 | Workstream | Remaining work |
 | --- | --- |
-| Reliable marshal notifications | Remote push in the marshal app; background/terminated delivery and alert behavior; native-build provisioning and device acceptance. Current jobs poll every ten seconds while foregrounded. |
-| Continuous tracking | Location updates independent of the selected detail screen, appropriate background operation, owner-app tracking, embedded maps/routes, GPS history and traffic-aware ETA. Current estimates use straight-line distance and reported speed or a fallback. |
-| Intelligent dispatch | Nearest-responder selection, fresh idle-responder positions, skills, geography, incident priority, travel time and controlled automatic dispatch. Current selection uses eligibility and workload, then profile ID. |
-| Marshal teamwork | Nearby backup requests, calling other marshals, team assignments, roles, task splitting and live chat. |
-| Field evidence and closure | Marshal photo/video capture and upload, video review where needed, separate investigation and final closure, supervisor review and backend-enforced resolution requirements. |
-| Complete incident reports | Automatic report generation/storage at closure, printable/shareable exports, GPS logs and the required media package. Current downloads contain evidence references, not embedded media or historical GPS. |
+| Dependable marshal alerts and tracking | Push and background task code is present. Configure EAS project/APNs/FCM credentials and verify alerts and location on physical Android/iOS builds, including background/terminated states. The current tracking request interval is 15 seconds; the PRD target is 5 seconds. |
+| Intelligent dispatch | Add skill matching, geographic coverage, incident-priority policy and traffic-aware travel estimates. Distance ranking needs incident coordinates; automatic camera-incident dispatch needs a reliable destination source and acceptance policy. |
+| Response workflow acceptance | Team invites, backup requests, task labels, shared chat, field photo/video capture and upload, investigation, supervisor review and final closure are implemented locally. Add focused automated coverage and complete owner-to-marshal-to-supervisor drills on real devices. |
+| Complete incident reports | Automatic report generation/storage at closure, printable/shareable exports, GPS history and a media package. Current on-demand JSON reports contain evidence references rather than embedded media and omit GPS history. |
 | Sensors and SOS | Dedicated intrusion-sensor registration/adapters, sensor-camera event fusion, and a panic SOS workflow. A manual report form is already available. |
 | Additional analytics | Weapon, tailgating, object-removal, camera-tamper and validated vehicle detection; explicit recommended actions and priority policies. |
 | Operational tools | Administrator onboarding-review UI, contact verification where required, identity-key rotation, retention/deletion processes, SLA indicators, response-time analytics and QRT utilization. Review currently uses a trusted local CLI. |
@@ -79,10 +78,10 @@ making it an MVP release requirement.
   Identity encryption and scoped API/media access do not establish end-to-end
   encryption for the whole platform or ISO 27001 certification.
 
-**Next priorities:** accept the real-device pilot, make marshal alerts and
-tracking dependable in the background, then complete teamwork/evidence/closure
-and nearest-responder dispatch. Expand sensor and advanced-AI coverage after
-the core response path is accepted.
+**Next priorities:** validate the response workflow on physical devices, configure
+push and background services, then finish skill/coverage-aware dispatch and
+complete reports. Expand sensor and advanced-AI coverage after the security
+pilot is accepted.
 
 ## Repository layout
 

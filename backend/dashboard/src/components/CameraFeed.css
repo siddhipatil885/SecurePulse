@@ -30,6 +30,8 @@
 
 .camera-snapshot.contain { object-fit: contain; }
 
+.retry-camera { position: absolute; bottom: 16px; right: 16px; z-index: 20; }
+
 .offline-message {
   color: var(--status-red);
   font-size: 1.2rem;

@@ -1,6 +1,7 @@
 """Transaction-neutral persistence for dispatch and notification workers."""
 
 from datetime import datetime, timedelta, timezone
+from math import asin, cos, radians, sin, sqrt
 import random
 
 from sqlalchemy import and_, func, or_, select
@@ -138,6 +139,7 @@ class DispatchRepository:
         property_id: int,
         fresh_since: datetime,
         excluded_profile_ids: set[int] | None = None,
+        destination: tuple[float, float] | None = None,
     ) -> list[MarshalProfile]:
         now = datetime.now(timezone.utc)
 
@@ -147,7 +149,7 @@ class DispatchRepository:
                 Assignment.marshal_profile_id == MarshalProfile.id,
                 or_(
                     Assignment.status.in_(
-                        ["ACCEPTED", "EN_ROUTE", "ON_SCENE"]
+                        ["ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW"]
                     ),
                     and_(
                         Assignment.status == "OFFERED",
@@ -160,7 +162,7 @@ class DispatchRepository:
         )
 
         statement = (
-            select(MarshalProfile, active_load.label("active_load"))
+            select(MarshalProfile, active_load.label("active_load"), MarshalAvailability)
             .join(User, User.id == MarshalProfile.user_id)
             .join(
                 PropertyMembership,
@@ -194,19 +196,58 @@ class DispatchRepository:
             )
 
         rows = (await self.session.execute(statement)).all()
-        return [profile for profile, _load in rows]
+        if destination is None:
+            return [profile for profile, _load, _availability in rows]
 
-    async def prior_attempt_profile_ids(self, incident_id: int) -> set[int]:
+        target_latitude, target_longitude = destination
+
+        def ranked(row):
+            profile, load, availability = row
+            updated_at = availability.location_updated_at
+            if updated_at is not None and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            location_is_fresh = bool(
+                availability.latitude is not None
+                and availability.longitude is not None
+                and updated_at is not None
+                and updated_at >= now - timedelta(minutes=2)
+            )
+            if not location_is_fresh:
+                return (1, float("inf"), load, profile.id)
+            lat1, lat2 = radians(availability.latitude), radians(target_latitude)
+            delta_lat = lat2 - lat1
+            delta_lon = radians(target_longitude - availability.longitude)
+            haversine = sin(delta_lat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(delta_lon / 2) ** 2
+            distance_m = 6_371_000 * 2 * asin(sqrt(min(1.0, haversine)))
+            return (0, distance_m, load, profile.id)
+
+        return [profile for profile, _load, _availability in sorted(rows, key=ranked)]
+
+    async def prior_attempt_profile_ids(
+        self, incident_id: int | None = None, reporter_incident_id: int | None = None
+    ) -> set[int]:
+        source_filter = (
+            Assignment.security_event_id == incident_id
+            if incident_id is not None
+            else Assignment.reporter_incident_id == reporter_incident_id
+        )
         statement = select(Assignment.marshal_profile_id).where(
-            Assignment.security_event_id == incident_id,
+            source_filter,
             Assignment.status.in_(["DECLINED", "EXPIRED"]),
         )
         return set((await self.session.scalars(statement)).all())
 
-    async def assignment_attempt_count(self, incident_id: int) -> int:
+    async def assignment_attempt_count(
+        self, incident_id: int | None = None, reporter_incident_id: int | None = None
+    ) -> int:
+        source_filter = (
+            Assignment.security_event_id == incident_id
+            if incident_id is not None
+            else Assignment.reporter_incident_id == reporter_incident_id
+        )
         count = await self.session.scalar(
             select(func.count(Assignment.id)).where(
-                Assignment.security_event_id == incident_id
+                source_filter
             )
         )
         return int(count or 0)

@@ -6,7 +6,7 @@ from sqlalchemy import Integer, String, case, cast, func, literal, null, or_, se
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ApplicationError
-from app.models import (Assignment, AssignmentEvent, AuditRecord, Camera, Evidence,
+from app.models import (Assignment, AssignmentEvent, AuditRecord, Camera, Evidence, MarshalEvidence,
     IncidentStatusHistory, NotificationOutbox, Property, ReporterIncident,
     ReporterIncidentEvidence, ReporterIncidentTimeline, SecurityEvent, MarshalAvailability)
 from app.schemas.case import (CaseCommand, CaseDetail, CaseEvidence, CaseEvidencePage,
@@ -14,7 +14,7 @@ from app.schemas.case import (CaseCommand, CaseDetail, CaseEvidence, CaseEvidenc
 from app.schemas.dispatch import OfferView, ResponderLocation
 from app.services.location import distance_metres, estimate_eta_seconds, MIN_MOVING_SPEED_MPS
 
-ACTIVE_ASSIGNMENTS = ("OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE")
+ACTIVE_ASSIGNMENTS = ("OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW")
 TRANSITIONS = {
     "acknowledge": ({"OPEN"}, "ACKNOWLEDGED"),
     "resolve": ({"OPEN", "ACKNOWLEDGED"}, "RESOLVED"),
@@ -67,7 +67,7 @@ class CaseService:
         summary = self.summary(item, source, assignment)
         destination_latitude = getattr(item, "latitude", None)
         destination_longitude = getattr(item, "longitude", None)
-        if assignment and assignment.status in {'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'}:
+        if assignment and assignment.status in {'ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING'}:
             availability = await self.session.get(MarshalAvailability, assignment.marshal_profile_id)
             if availability and availability.location_updated_at and availability.latitude is not None and availability.longitude is not None:
                 eta_fields = {}
@@ -234,14 +234,23 @@ class CaseService:
         await self.get(property_id, source, source_id)
         model = Evidence if source == "camera" else ReporterIncidentEvidence
         condition = model.event_id == source_id if source == "camera" else model.incident_id == source_id
-        total = await self.session.scalar(select(func.count()).select_from(model).where(condition))
-        rows = (await self.session.scalars(select(model).where(condition).order_by(model.id)
-            .offset((page - 1) * page_size).limit(page_size))).all()
-        return CaseEvidencePage(items=[CaseEvidence(id=item.id, kind=item.type if source == "camera" else "ATTACHMENT",
+        standard = (await self.session.scalars(select(model).where(condition))).all()
+        marshal_query = select(MarshalEvidence, Assignment.id).join(Assignment, Assignment.id == MarshalEvidence.assignment_id).where(
+            Assignment.property_id == property_id, assignment_filter(source, source_id))
+        uploaded = (await self.session.execute(marshal_query)).all()
+        combined = [(item.timestamp if source == "camera" else item.created_at,
+                     CaseEvidence(id=item.id, kind=item.type if source == "camera" else "ATTACHMENT",
             media_type=None if source == "camera" else item.media_type,
             original_filename=None if source == "camera" else item.original_filename,
             byte_size=None if source == "camera" else item.byte_size,
-            occurred_at=item.timestamp if source == "camera" else item.created_at) for item in rows],
+            occurred_at=item.timestamp if source == "camera" else item.created_at)) for item in standard]
+        combined.extend((item.created_at, CaseEvidence(id=item.id, kind="MARSHAL_UPLOAD", media_type=item.media_type,
+            original_filename=item.original_filename, byte_size=item.byte_size, occurred_at=item.created_at,
+            source="marshal", assignment_id=assignment_id)) for item, assignment_id in uploaded)
+        combined.sort(key=lambda row: (row[0], row[1].source, row[1].id))
+        total = len(combined)
+        start = (page - 1) * page_size
+        return CaseEvidencePage(items=[row[1] for row in combined[start:start + page_size]],
             total=total, page=page, page_size=page_size)
 
     async def evidence_record(self, property_id, source, source_id, evidence_id):

@@ -80,7 +80,7 @@ function IncidentDetail({ id, property, onChanged, refreshVersion }: { id: strin
         <h3>Update incident</h3><label>Action<select aria-label="Action" value={action} onChange={e => setAction(e.target.value as IncidentAction)}>
           {actions.map(item => <option key={item} value={item}>{item === 'dismiss' ? 'Dismiss as false alarm' : item.charAt(0).toUpperCase() + item.slice(1)}</option>)}
         </select></label>
-        <label>Reason<textarea value={reason} onChange={e => setReason(e.target.value)} required maxLength={1000} /></label>
+        <label>Reason<textarea aria-label="Reason" value={reason} onChange={e => setReason(e.target.value)} required maxLength={1000} /></label>
         <p className="field-hint">This change is recorded in the incident history.</p>
         <button type="submit" disabled={busy || !reason.trim()}>{busy ? 'Saving action…' : 'Confirm action'}</button>
       </fieldset></form> : property.role === 'reporter' && <p>You have read-only access to this property.</p>}

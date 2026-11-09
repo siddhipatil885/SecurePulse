@@ -23,9 +23,9 @@ const CameraMonitor: React.FC<CameraMonitorProps> = ({ propertyId, primaryCamera
           <div 
             key={cam.id} 
             className="secondary-camera-item"
-            onClick={() => onSelectCamera(cam.id)}
           >
             <CameraFeed propertyId={propertyId} camera={cam} isPrimary={false} tracks={tracksByCamera[cam.id] ?? []} />
+            <button className="select-camera" onClick={() => onSelectCamera(cam.id)} aria-label={`Select ${cam.name} as primary camera`}>Select camera</button>
           </div>
         ))}
       </div>

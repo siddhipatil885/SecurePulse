@@ -167,12 +167,12 @@ class Assignment(Base):
             "uq_assignments_one_active_offer",
             "security_event_id",
             unique=True,
-            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
-            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
+            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW') AND team_key IS NULL"),
+            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW') AND team_key IS NULL"),
         ),
         Index("uq_assignments_one_active_reporter", "reporter_incident_id", unique=True,
-            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')"),
-            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE')")),
+            postgresql_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW') AND team_key IS NULL"),
+            sqlite_where=text("status IN ('ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW') AND team_key IS NULL")),
         Index('uq_assignment_pending_camera_marshal', 'security_event_id', 'marshal_profile_id', unique=True,
             postgresql_where=text("status = 'OFFERED'"), sqlite_where=text("status = 'OFFERED'")),
         Index('uq_assignment_pending_reporter_marshal', 'reporter_incident_id', 'marshal_profile_id', unique=True,
@@ -189,6 +189,8 @@ class Assignment(Base):
         ForeignKey("reporter_incidents.id", ondelete="CASCADE")
     )
     marshal_profile_id: Mapped[int] = mapped_column(ForeignKey("marshal_profiles.id"), nullable=False)
+    team_key: Mapped[str | None] = mapped_column(String(64))
+    team_role: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     offered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -214,3 +216,59 @@ class AssignmentEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     assignment = relationship("Assignment", back_populates="events")
+
+
+class MarshalLocationHistory(Base):
+    __tablename__ = "marshal_location_history"
+    __table_args__ = (
+        Index("ix_marshal_location_history_assignment_recorded", "assignment_id", "recorded_at"),
+        Index("ix_marshal_location_history_property_recorded", "property_id", "recorded_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    marshal_profile_id: Mapped[int] = mapped_column(ForeignKey("marshal_profiles.id", ondelete="CASCADE"), nullable=False)
+    latitude: Mapped[float] = mapped_column(nullable=False)
+    longitude: Mapped[float] = mapped_column(nullable=False)
+    accuracy_m: Mapped[float | None] = mapped_column()
+    heading: Mapped[float | None] = mapped_column()
+    speed_mps: Mapped[float | None] = mapped_column()
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MarshalEvidence(Base):
+    __tablename__ = "marshal_evidence"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", "idempotency_key", name="uq_marshal_evidence_assignment_upload"),
+        Index("ix_marshal_evidence_assignment_created", "assignment_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    uploader_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AssignmentMessage(Base):
+    __tablename__ = "assignment_messages"
+    __table_args__ = (
+        UniqueConstraint("sender_user_id", "client_message_id", name="uq_assignment_messages_sender_client_id"),
+        Index("ix_assignment_messages_thread_created", "thread_key", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    sender_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    thread_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    client_message_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
