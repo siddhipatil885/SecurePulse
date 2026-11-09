@@ -85,8 +85,8 @@ export function AccountFlow({ onSignedIn, registrationEnabled, authEnabled, noti
       <button type="submit">{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : step === 1 ? 'Continue to property details' : 'Create account'}</button>
       {mode === 'register' && step === 2 && <button type="button" onClick={() => setStep(1)}>Back to account details</button>}
     </fieldset></form>
-    <button className="text-button" type="button" disabled={busy} onClick={() => changeMode(mode === 'login' && registrationEnabled ? 'register' : 'login')}>
-      {mode === 'register' ? 'Already have an account? Sign in' : registrationEnabled ? 'Create an account' : 'Registration is managed by your administrator'}
-    </button>
+    {(mode === 'register' || registrationEnabled) ? <button className="text-button" type="button" disabled={busy} onClick={() => changeMode(mode === 'login' ? 'register' : 'login')}>
+      {mode === 'register' ? 'Already have an account? Sign in' : 'Create an account'}
+    </button> : <p>Registration is managed by your administrator</p>}
   </section></main>;
 }

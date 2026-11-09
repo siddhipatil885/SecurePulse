@@ -16,14 +16,33 @@ cp .env.example .env
 npm start -- --lan --go
 ```
 
-Metro uses port 8082, so the owner app can remain running on 8081. Open the QR
-in SDK 58 Expo Go on the same network. This app currently has no remote push
-integration; keep it foregrounded to receive updates through 10-second polling.
-Incoming offers repeat an offline two-tone alarm and vibrate while foregrounded.
-The alert stops on accept, decline, expiry, cancellation, sign-out or
-backgrounding. Silence affects current offers; a new job sounds again. Device
-media volume controls audibility. Background/terminated delivery requires
-configured remote push in a development/release build.
+Metro uses port 8082, so the owner app can remain running on 8081. Expo Go is
+useful for UI work, but it cannot receive remote push or run the native
+background location service. Use a development build on a physical phone to
+validate those features.
+
+## Urgent assignment alerts
+
+On sign-in the app asks for notification permission, registers an Expo push
+token, and enables the marshal's dispatch-alert preference. New assignment
+offers use a high-priority notification, a dedicated Android alert channel,
+vibration, and `assets/assignment-alarm.wav`. Tapping an alert opens that job.
+The foreground repeating alarm remains as a backup while the app is open.
+
+Link this app to an Expo project with `npx eas-cli@latest init`, set its UUID as
+`EXPO_PUBLIC_EXPO_PROJECT_ID` in `.env` and in the selected EAS build
+environment, then configure Android FCM v1 and iOS APNs credentials in EAS.
+Set the backend's `DISPATCH_NOTIFICATION_PROVIDER=expo` and (when push security
+is enabled) `EXPO_PUSH_ACCESS_TOKEN`. Build and install the native client:
+
+```sh
+npx eas-cli@latest build --profile development --platform android
+# or --platform ios (requires Apple Developer credentials)
+npx expo start --dev-client --port 8082
+```
+
+Notification sounds still follow the phone's channel, focus and volume
+settings; those cannot be overridden by the app.
 There is no web sign-in or default backend. Session credentials are kept in
 SecureStore and validated before restored access. Account provisioning is an
 administrator operation; no marshal is created automatically.
@@ -40,10 +59,11 @@ territories require a future data-model change.
 
 ## Working flow
 
-Sign in → go on duty → review assignment → accept or decline → open directions
-→ start journey → confirm arrival → record investigation/resolution notes →
-confirm resolution. History contains completed, declined, expired and cancelled
-assignments. Pull to refresh is available on each tab/detail.
+Sign in → complete approved onboarding → go on duty → review assignment →
+accept or decline → open directions → start journey → confirm arrival → begin
+investigation → attach field evidence and submit a summary → supervisor review →
+closed or returned for more investigation. History contains completed, declined,
+expired and cancelled assignments. Pull to refresh is available on each tab/detail.
 
 The backend verifies active marshal membership and profile for every marshal
 workspace request. Only personally assigned incidents are returned. Progress
@@ -52,24 +72,24 @@ are foreground-only; eligibility expires after five minutes without an update.
 Going off duty does not cancel accepted work. Sign-out revokes the account's
 existing application sessions, consistent with the backend auth model.
 
-Owner dispatch offers have a five-minute deadline and can target several
-selected on-duty marshals. The first acceptance wins and closes other offers.
-Incident photos and camera snapshots appear in assigned jobs through
-short-lived authenticated grants. Cancelled/expired offers lose media access.
-Image errors offer a fresh-link retry. Video playback remains a command-center
-task in this client.
+Owner dispatch offers have a five-minute deadline. Broadcast offers use first
+acceptance; team invitations permit multiple responders to accept. Marshals can
+request nearby backup, coordinate in a shared chat, assign task labels, capture
+photos or videos, and upload field evidence. Incident and field media use
+short-lived authenticated grants. Supervisors review the investigation and
+either close the incident or return it to the marshal.
+Navigation opens an external maps app using the supplied coordinates or property
+address. During active assignments, the app requests foreground and background
+location access and requests a point about every 15 seconds or after 20 metres
+of movement. Android displays its required foreground-service notification. Owners
+and dispatchers see the current point, recent route, and incident directions in
+the owner app. The API exposes up to 24 hours of assignment-scoped GPS history.
+If background permission is declined, location updates continue only while the
+app is open. Location sharing ends when there is no active assignment or the
+marshal signs out.
 
-The UI requires an on-scene note before resolution, but the existing general
-dispatch API retains its previous completion contract. `ON_SCENE` covers arrival
-and investigation; `COMPLETED` resolves the incident. Distinct investigating and
-closed states, supervisor closure, evidence capture/upload, chat,
-push dispatch and background availability are **not implemented** in this first
-version. Navigation opens an external maps app using the supplied coordinates
-or property address. During active assignments the app requests foreground
-location permission and publishes its latest position. Owners can see that
-position and an estimated arrival time for incidents with coordinates. Estimates
-use GPS speed or a documented fallback, without traffic data. Background location
-tracking and historical GPS storage are not implemented.
+Location and push behavior still need physical-device acceptance using an EAS
+development/release build; Expo Go cannot verify either background service.
 
 ## Verification
 

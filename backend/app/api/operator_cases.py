@@ -13,11 +13,11 @@ from app.core.auth import Principal
 from app.core.config import get_settings
 from app.core.dependencies import get_session, get_event_publisher, get_mutation_rate_limiter
 from app.core.exceptions import ApplicationError
-from app.models import Assignment, AuditRecord, NotificationAttempt, NotificationOutbox, User
+from app.models import Assignment, AssignmentMessage, AuditRecord, MarshalEvidence, NotificationAttempt, NotificationOutbox, User
 from app.repositories.dispatch import DispatchRepository
 from app.schemas.case import (AssignmentCancel, CaseAssignmentPage, CaseCommand, CaseDetail,
     CaseEvidencePage, CaseOffer, CasePage, CaseSeverity, CaseSource, CaseStatus, CaseTimelinePage, OperatorMarshal)
-from app.schemas.dispatch import OfferView
+from app.schemas.dispatch import OfferView, SupervisorReview
 from app.schemas.report import IncidentReport, NotificationReport
 from app.services.case_service import CaseService, assignment_filter
 from app.services.dispatch_service import DispatchService
@@ -232,38 +232,133 @@ async def cancel(property_id: int, source: CaseSource, source_id: int, assignmen
     return result
 
 
+def _assignment_thread(item: Assignment) -> str:
+    return f"team:{item.team_key}" if item.team_key else f"assignment:{item.id}"
+
+
+async def _case_assignment(property_id, source, source_id, assignment_id, session):
+    await CaseService(session).get(property_id, source, source_id)
+    item = await session.scalar(select(Assignment).where(Assignment.id == assignment_id,
+        Assignment.property_id == property_id, assignment_filter(source, source_id)))
+    if item is None:
+        raise ApplicationError("ASSIGNMENT_NOT_FOUND", "The assignment does not belong to this incident.", 404)
+    return item
+
+
+@router.post("/{source}/{source_id}/assignments/{assignment_id}/review", response_model=OfferView)
+async def review_case_assignment(property_id: int, source: CaseSource, source_id: int, assignment_id: int,
+        body: SupervisorReview, principal: Principal = Depends(mutation), session: AsyncSession = Depends(get_session)):
+    item = await _case_assignment(property_id, source, source_id, assignment_id, session)
+    if item.status != "PENDING_REVIEW":
+        raise ApplicationError("REVIEW_CONFLICT", "This response is not waiting for supervisor review.", 409)
+    result = await DispatchService(session).supervisor_review(offer_id=item.id,
+        expected_version=body.expected_version, approved=body.approved, reason=body.reason,
+        actor_subject=principal.subject)
+    await session.commit()
+    await publish(property_id, source, source_id)
+    return result
+
+
+@router.get("/{source}/{source_id}/assignments/{assignment_id}/messages")
+async def case_messages(property_id: int, source: CaseSource, source_id: int, assignment_id: int,
+        after_id: int = Query(0, ge=0), principal: Principal = Depends(operator), session: AsyncSession = Depends(get_session)):
+    item = await _case_assignment(property_id, source, source_id, assignment_id, session)
+    rows = (await session.execute(select(AssignmentMessage, User.display_name).join(
+        User, User.id == AssignmentMessage.sender_user_id).where(
+        AssignmentMessage.thread_key == _assignment_thread(item), AssignmentMessage.id > after_id
+    ).order_by(AssignmentMessage.id).limit(100))).all()
+    return {"items": [{"id": message.id, "sender": display_name, "body": message.body,
+        "created_at": message.created_at} for message, display_name in rows]}
+
+
+@router.post("/{source}/{source_id}/assignments/{assignment_id}/messages", status_code=201)
+async def case_send_message(property_id: int, source: CaseSource, source_id: int, assignment_id: int,
+        body: dict, principal: Principal = Depends(mutation), session: AsyncSession = Depends(get_session)):
+    from pydantic import TypeAdapter
+    from app.api.marshal import MessageCreate
+    message_body = TypeAdapter(MessageCreate).validate_python(body)
+    item = await _case_assignment(property_id, source, source_id, assignment_id, session)
+    if item.status not in {"ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW"}:
+        raise ApplicationError("ASSIGNMENT_NOT_ACTIVE", "This assignment conversation is closed.", 409)
+    try:
+        sender_id = int(principal.subject.split(":")[-1])
+    except ValueError:
+        raise ApplicationError("FORBIDDEN", "The signed-in user cannot send assignment messages.", 403) from None
+    text = message_body.body.strip()
+    if not text:
+        raise ApplicationError("INVALID_MESSAGE", "Enter a message.", 422)
+    existing = await session.scalar(select(AssignmentMessage).where(
+        AssignmentMessage.sender_user_id == sender_id, AssignmentMessage.client_message_id == message_body.client_message_id))
+    if existing is None:
+        existing = AssignmentMessage(assignment_id=item.id, property_id=property_id, sender_user_id=sender_id,
+            thread_key=_assignment_thread(item), client_message_id=message_body.client_message_id, body=text)
+        session.add(existing)
+        session.add(AuditRecord(property_id=property_id, actor_subject=principal.subject,
+            action="ASSIGNMENT_MESSAGE_SENT", resource_type="assignment", resource_id=str(item.id),
+            correlation_id=f"message:{message_body.client_message_id}", details={}))
+    await session.commit()
+    await publish(property_id, source, source_id)
+    return {"id": existing.id, "body": existing.body}
+
+
 @router.post("/{source}/{source_id}/evidence/{evidence_id}/access")
 async def grant(property_id: int, source: CaseSource, source_id: int, evidence_id: int,
+                media_source: str = Query("incident", pattern="^(incident|marshal)$"),
+                assignment_id: int | None = Query(None, ge=1),
                 principal: Principal = Depends(operator), session: AsyncSession = Depends(get_session)):
-    incident, item = await CaseService(session).evidence_record(property_id, source, source_id, evidence_id)
-    if source == "reporter":
+    if media_source == "marshal":
+        if assignment_id is None:
+            raise ApplicationError("EVIDENCE_NOT_FOUND", "The requested evidence does not exist.", 404)
+        assignment = await _case_assignment(property_id, source, source_id, assignment_id, session)
+        item = await session.scalar(select(MarshalEvidence).where(MarshalEvidence.id == evidence_id,
+            MarshalEvidence.assignment_id == assignment.id, MarshalEvidence.property_id == property_id))
+        if item is None:
+            raise ApplicationError("EVIDENCE_NOT_FOUND", "The requested evidence does not exist.", 404)
         await ReporterStorage(get_settings()).ensure(item.file_path)
-    elif not evidence_api.frigate_snapshot(item, incident):
-        evidence_api.media_path(item.file_path)
+    else:
+        incident, item = await CaseService(session).evidence_record(property_id, source, source_id, evidence_id)
+        if source == "reporter":
+            await ReporterStorage(get_settings()).ensure(item.file_path)
+        elif not evidence_api.frigate_snapshot(item, incident):
+            evidence_api.media_path(item.file_path)
     settings = get_settings()
     expires = datetime.now(timezone.utc) + timedelta(seconds=60)
     token = jwt.encode({"aud": "operator-case-evidence", "sub": principal.subject, "exp": expires,
-        "source": source, "source_id": source_id, "property_id": property_id, "evidence_id": evidence_id},
+        "source": source, "source_id": source_id, "property_id": property_id, "evidence_id": evidence_id,
+        "media_source": media_source, "assignment_id": assignment_id},
         settings.jwt_secret, algorithm=settings.jwt_algorithm)
     await audit(session, property_id, source, source_id, principal.subject, "CASE_EVIDENCE_ACCESS_GRANTED", {"evidence_id": evidence_id})
-    return {"url": f"/api/v1/dashboard/properties/{property_id}/cases/{source}/{source_id}/evidence/{evidence_id}/content?grant={token}",
+    suffix = f"?media_source=marshal&assignment_id={assignment_id}&grant={token}" if media_source == "marshal" else f"?grant={token}"
+    return {"url": f"/api/v1/dashboard/properties/{property_id}/cases/{source}/{source_id}/evidence/{evidence_id}/content{suffix}",
             "expires_at": expires.isoformat()}
 
 
 @router.get("/{source}/{source_id}/evidence/{evidence_id}/content")
 async def content(property_id: int, source: CaseSource, source_id: int, evidence_id: int,
+                  media_source: str = Query("incident", pattern="^(incident|marshal)$"),
+                  assignment_id: int | None = Query(None, ge=1),
                   grant: str = Query(min_length=1, max_length=4096),
                   range_header: str | None = Header(None, alias="Range"),
                   principal: Principal = Depends(operator), session: AsyncSession = Depends(get_session)):
     settings = get_settings()
     try:
         claims = jwt.decode(grant, settings.jwt_secret, algorithms=[settings.jwt_algorithm], audience="operator-case-evidence",
-            options={"require": ["aud", "exp", "sub", "source", "source_id", "property_id", "evidence_id"]})
-        if (claims["sub"], claims["source"], claims["source_id"], claims["property_id"], claims["evidence_id"]) != (
-                principal.subject, source, source_id, property_id, evidence_id):
+            options={"require": ["aud", "exp", "sub", "source", "source_id", "property_id", "evidence_id", "media_source", "assignment_id"]})
+        if (claims["sub"], claims["source"], claims["source_id"], claims["property_id"], claims["evidence_id"], claims["media_source"], claims["assignment_id"]) != (
+                principal.subject, source, source_id, property_id, evidence_id, media_source, assignment_id):
             raise ValueError("Grant binding mismatch")
     except (jwt.InvalidTokenError, ValueError, TypeError):
         raise ApplicationError("INVALID_MEDIA_GRANT", "The evidence grant is invalid or expired.", 401) from None
+    if media_source == "marshal":
+        if assignment_id is None:
+            raise ApplicationError("EVIDENCE_NOT_FOUND", "The requested evidence does not exist.", 404)
+        assignment = await _case_assignment(property_id, source, source_id, assignment_id, session)
+        item = await session.scalar(select(MarshalEvidence).where(MarshalEvidence.id == evidence_id,
+            MarshalEvidence.assignment_id == assignment.id, MarshalEvidence.property_id == property_id))
+        if item is None:
+            raise ApplicationError("EVIDENCE_NOT_FOUND", "The requested evidence does not exist.", 404)
+        await audit(session, property_id, source, source_id, principal.subject, "CASE_EVIDENCE_CONTENT_ACCESSED", {"evidence_id": evidence_id, "assignment_id": assignment_id})
+        return await ReporterStorage(settings).serve(item.file_path, item.media_type, range_header)
     incident, item = await CaseService(session).evidence_record(property_id, source, source_id, evidence_id)
     if source == "camera":
         return await evidence_api.serve_evidence(item, incident, principal, session)

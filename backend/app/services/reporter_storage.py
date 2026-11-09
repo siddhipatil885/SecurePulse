@@ -32,7 +32,7 @@ class ReporterStorage:
         parsed = urlsplit(reference)
         key = parsed.path.lstrip("/")
         if (parsed.scheme != "s3" or parsed.netloc != self.settings.evidence_bucket
-                or not re.fullmatch(r"reporter-incidents/[1-9][0-9]*/[a-f0-9]{32}\.(jpg|png|mp4)", key)
+                or not re.fullmatch(r"(?:reporter-incidents/[1-9][0-9]*|marshal-assignments/[1-9][0-9]*)/[a-f0-9]{32}\.(jpg|png|mp4)", key)
                 or parsed.query or parsed.fragment):
             raise ApplicationError("MEDIA_NOT_FOUND", "Evidence media is unavailable.", 404)
         return key

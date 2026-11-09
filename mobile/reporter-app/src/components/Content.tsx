@@ -9,6 +9,7 @@ export const ui = StyleSheet.create({
   title: { color: '#0f172a', fontSize: 28, fontWeight: '800' },
   heading: { color: '#0f172a', fontSize: 19, fontWeight: '700' },
   text: { color: '#475569', fontSize: 16, lineHeight: 23 },
+  link: { color: '#0f766e', fontSize: 16, fontWeight: '700', textDecorationLine: 'underline' },
   card: { backgroundColor: '#fff', borderColor: '#e2e8f0', borderWidth: 1, borderRadius: 12, padding: 16, gap: 8 },
   label: { color: '#334155', fontSize: 15, fontWeight: '600' },
   input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#94a3b8', borderRadius: 10, color: '#0f172a', padding: 14, minHeight: 50, fontSize: 16 },

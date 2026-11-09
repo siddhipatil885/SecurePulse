@@ -15,7 +15,7 @@ class IncidentRepository:
     async def has_active_assignment(self, incident_id: int) -> bool:
         return await self.session.scalar(select(Assignment.id).where(
             Assignment.security_event_id == incident_id,
-            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).limit(1)) is not None
+            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW"])).limit(1)) is not None
 
     async def get_for_update(
         self, incident_id: int, property_ids: frozenset[int] | None

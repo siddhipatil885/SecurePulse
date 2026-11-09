@@ -17,7 +17,7 @@ function EvidencePreview({ item, path }: { item: CaseEvidence; path: string }) {
   const [url, setUrl] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   async function open() {
     setBusy(true); setError(''); setUrl('');
-    try { const grant = await request<{ url: string }>(`${path}/evidence/${item.id}/access`, { method: 'POST' }); setUrl(grant.url); }
+    try { const query = item.source === 'marshal' ? `?media_source=marshal&assignment_id=${item.assignment_id}` : ''; const grant = await request<{ url: string }>(`${path}/evidence/${item.id}/access${query}`, { method: 'POST' }); setUrl(grant.url); }
     catch (error) { setError(message(error)); }
     finally { setBusy(false); }
   }
@@ -45,6 +45,8 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
   const [timelinePage, setTimelinePage] = useState(1); const [evidencePage, setEvidencePage] = useState(1); const [assignmentPage, setAssignmentPage] = useState(1);
   const [action, setAction] = useState(''); const [reason, setReason] = useState(''); const [marshalId, setMarshalId] = useState('');
   const [expiry, setExpiry] = useState(300);
+  const [reviewReason, setReviewReason] = useState(''); const [chatDraft, setChatDraft] = useState('');
+  const [chatMessages, setChatMessages] = useState<{ id: number; sender: string; body: string; created_at: string }[]>([]);
   const actionRequest = useRef<{ signature: string; key: string } | null>(null);
   const offerRequest = useRef<{ signature: string; key: string } | null>(null);
   useEffect(() => {
@@ -125,12 +127,19 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
   }
   const detail = data?.detail;
   const assignment = detail?.latest_assignment;
-  const active = assignment && ['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(assignment.status);
-  const tracking = assignment && ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(assignment.status);
+  const active = assignment && ['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW'].includes(assignment.status);
+  const tracking = assignment && ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW'].includes(assignment.status);
   const position = tracking ? assignment.responder_location : null;
   const validPosition = position && Number.isFinite(position.latitude) && Math.abs(position.latitude) <= 90 && Number.isFinite(position.longitude) && Math.abs(position.longitude) <= 180;
   const locationAge = position ? clock - Date.parse(position.updated_at) : NaN;
   const recentPosition = clock > 0 && Number.isFinite(locationAge) && locationAge >= -5000 && locationAge <= 30000;
+  useEffect(() => {
+    if (!assignment || !['ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW'].includes(assignment.status)) { setChatMessages([]); return; }
+    let alive = true;
+    const load = async () => { try { const result = await request<{ items: typeof chatMessages }>(`${path}/assignments/${assignment.id}/messages`); if (alive) setChatMessages(result.items); } catch { /* The incident panel reports access errors separately. */ } };
+    void load(); const timer = window.setInterval(() => void load(), 3000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [path, assignment?.id, assignment?.status]);
   return <section className="incident-panel incident-detail" aria-label="Incident details">
     <h2>{selected.source === 'camera' ? 'Camera incident' : 'Reported incident'} #{selected.source_id}</h2>
     {!data && !error && <p role="status">Loading incident…</p>}
@@ -165,6 +174,27 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
         <button disabled={busy || !reason.trim()} type="submit">{busy ? 'Saving…' : 'Confirm action'}</button>
       </fieldset></form>}
       <h3>Dispatch</h3>{assignment ? <p>Assignment #{assignment.id} · {assignment.status} · Marshal #{assignment.marshal_profile_id}</p> : <p>No assignment exists for this incident.</p>}
+      {assignment?.status === 'PENDING_REVIEW' && <form onSubmit={async event => {
+        event.preventDefault(); if (busy || reviewReason.trim().length < 5) return;
+        setBusy(true); setActionError('');
+        try { await request(`${path}/assignments/${assignment.id}/review`, { method: 'POST', body: JSON.stringify({ expected_version: assignment.version, approved: true, reason: reviewReason.trim() }) }); setReviewReason(''); setSuccess('Investigation approved and incident closed.'); onChanged(); }
+        catch (error) { setActionError(message(error)); }
+        finally { setBusy(false); setRevision(value => value + 1); }
+      }}><fieldset disabled={busy}><label>Supervisor review notes<textarea required minLength={5} maxLength={2000} value={reviewReason} onChange={event => setReviewReason(event.target.value)} /></label>
+        <button disabled={busy || reviewReason.trim().length < 5} type="submit">Approve and close</button>
+        <button type="button" disabled={busy || reviewReason.trim().length < 5} onClick={async () => {
+          setBusy(true); setActionError('');
+          try { await request(`${path}/assignments/${assignment.id}/review`, { method: 'POST', body: JSON.stringify({ expected_version: assignment.version, approved: false, reason: reviewReason.trim() }) }); setReviewReason(''); setSuccess('Returned to marshal for further investigation.'); onChanged(); }
+          catch (error) { setActionError(message(error)); }
+          finally { setBusy(false); setRevision(value => value + 1); }
+        }}>Return to investigation</button></fieldset></form>}
+      {assignment && ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'INVESTIGATING', 'PENDING_REVIEW'].includes(assignment.status) && <section aria-label="Incident chat"><h3>Incident chat</h3>
+        {chatMessages.map(item => <p key={item.id}><strong>{item.sender}</strong> · {item.body} <small>{date(item.created_at)}</small></p>)}
+        <form onSubmit={async event => { event.preventDefault(); const text = chatDraft.trim(); if (!text || busy) return; setBusy(true); setActionError('');
+          try { await request(`${path}/assignments/${assignment.id}/messages`, { method: 'POST', body: JSON.stringify({ body: text, client_message_id: `web-${crypto.randomUUID()}` }) }); setChatDraft(''); const result = await request<{ items: typeof chatMessages }>(`${path}/assignments/${assignment.id}/messages`); setChatMessages(result.items); }
+          catch (error) { setActionError(message(error)); }
+          finally { setBusy(false); }
+        }}><label>Message response team<input value={chatDraft} maxLength={2000} onChange={event => setChatDraft(event.target.value)} /></label><button disabled={busy || !chatDraft.trim()}>Send message</button></form></section>}
       <button disabled={busy || reportBusy} onClick={() => void downloadReport()}>{reportBusy ? 'Preparing report…' : 'Download incident report'}</button>
       <p>The JSON report includes timeline, notes, notification history and evidence references. Historical GPS is not recorded.</p>
       {active && <button disabled={busy} onClick={() => void mutate('cancel')}>Cancel assignment</button>}
@@ -179,7 +209,7 @@ function OperatorDetail({ propertyId, selected, refreshVersion, onChanged }: {
         <p>{item.reason}</p><small>{date(item.occurred_at)} · {item.actor_subject}{item.assignment_id ? ` · Assignment #${item.assignment_id}` : ''}</small>
       </li>)}</ol> : <p>No status changes recorded.</p>}
       <Pagination data={data.timeline} onPage={setTimelinePage} label="Timeline" />
-      <h3>Evidence</h3>{data.evidence.items.length ? <ul className="history-list">{data.evidence.items.map(item => <EvidencePreview key={item.id} item={item} path={path} />)}</ul> : <p>No evidence has been stored for this incident.</p>}
+      <h3>Evidence</h3>{data.evidence.items.length ? <ul className="history-list">{data.evidence.items.map(item => <EvidencePreview key={`${item.source || 'incident'}-${item.assignment_id || ''}-${item.id}`} item={item} path={path} />)}</ul> : <p>No evidence has been stored for this incident.</p>}
       <Pagination data={data.evidence} onPage={setEvidencePage} label="Evidence" />
       <h3>Assignment history</h3><ul className="history-list">{data.assignments.items.map(item => <li key={item.id}>#{item.id} · {item.status} · {date(item.offered_at)}</li>)}</ul>
       <Pagination data={data.assignments} onPage={setAssignmentPage} label="Assignments" />

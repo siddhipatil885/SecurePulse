@@ -1,6 +1,7 @@
 """Property-authorized, race-safe assignment orchestration."""
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ApplicationError
 from app.models import (
     Assignment,
+    AuditRecord,
     MarshalAvailability,
     MarshalProfile,
     NotificationOutbox,
@@ -18,6 +20,9 @@ from app.models import (
     User,
 )
 from app.repositories.dispatch import DispatchRepository
+
+ACTIVE_ASSIGNMENT_STATUSES = ("ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW")
+ALL_ACTIVE_ASSIGNMENT_STATUSES = ("OFFERED", *ACTIVE_ASSIGNMENT_STATUSES)
 
 
 class DispatchService:
@@ -88,7 +93,7 @@ class DispatchService:
     def _capacity_filter(now: datetime):
         """Count active assignments and offers whose deadlines have not elapsed."""
         return or_(
-            Assignment.status.in_(["ACCEPTED", "EN_ROUTE", "ON_SCENE"]),
+            Assignment.status.in_(ACTIVE_ASSIGNMENT_STATUSES),
             and_(
                 Assignment.status == "OFFERED",
                 Assignment.expires_at > now,
@@ -140,6 +145,7 @@ class DispatchService:
         idempotency_key: str,
         actor_subject: str,
         broadcast: bool = False,
+        team_key: str | None = None,
     ) -> Assignment:
         if (incident_id is None) == (reporter_incident_id is None):
             raise ApplicationError(
@@ -219,22 +225,34 @@ class DispatchService:
                 Assignment.reporter_incident_id == reporter_incident_id
             )
 
+        active_statuses = ACTIVE_ASSIGNMENT_STATUSES if broadcast else ALL_ACTIVE_ASSIGNMENT_STATUSES
         active_offer = await self.session.scalar(
             select(Assignment)
             .where(
                 source_filter,
-                Assignment.status.in_(
-                    ["ACCEPTED", "EN_ROUTE", "ON_SCENE"] if broadcast else ["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"]
-                ),
+                Assignment.status.in_(active_statuses),
             )
             .with_for_update()
         )
-        if active_offer is not None:
+        if active_offer is not None and team_key is None:
             raise ApplicationError(
                 "ACTIVE_ASSIGNMENT_EXISTS",
                 "This incident already has an active assignment.",
                 409,
             )
+        if active_offer is not None and team_key is not None:
+            active_team_keys = set((await self.session.scalars(
+                select(Assignment.team_key).where(
+                    source_filter,
+                    Assignment.status.in_(active_statuses),
+                )
+            )).all())
+            if active_team_keys != {team_key}:
+                raise ApplicationError(
+                    "ACTIVE_ASSIGNMENT_EXISTS",
+                    "This incident already has a different active response team.",
+                    409,
+                )
 
         eligibility_result = await self.session.execute(
             select(MarshalProfile, MarshalAvailability)
@@ -305,6 +323,7 @@ class DispatchService:
             security_event_id=incident_id,
             reporter_incident_id=reporter_incident_id,
             marshal_profile_id=marshal_profile_id,
+            team_key=team_key,
             status="OFFERED",
             offered_at=now,
             expires_at=now + timedelta(seconds=expires_in_seconds),
@@ -347,7 +366,7 @@ class DispatchService:
                 .where(
                     source_filter,
                     Assignment.status.in_(
-                        ["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"]
+                        ALL_ACTIVE_ASSIGNMENT_STATUSES
                     ),
                 )
                 .limit(1)
@@ -437,10 +456,10 @@ class DispatchService:
                     409,
                 )
 
-        if accept:
+        if accept and offer.team_key is None:
             siblings = (await self.session.scalars(select(Assignment).where(
                 self._same_source(offer), Assignment.id != offer.id,
-                Assignment.status.in_(['OFFERED', 'ACCEPTED', 'EN_ROUTE', 'ON_SCENE'])
+                Assignment.status.in_(ALL_ACTIVE_ASSIGNMENT_STATUSES)
             ).order_by(Assignment.id).with_for_update())).all()
             if any(item.status != 'OFFERED' for item in siblings):
                 raise ApplicationError('OFFER_CONFLICT', 'Another marshal has already accepted this incident.', 409)
@@ -579,7 +598,7 @@ class DispatchService:
             select(Assignment).where(
                 Assignment.security_event_id == incident_id,
                 Assignment.status.in_(
-                    ["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"]
+                    ALL_ACTIVE_ASSIGNMENT_STATUSES
                 ),
             )
         )
@@ -591,10 +610,18 @@ class DispatchService:
         excluded_profile_ids = (
             await self.repository.prior_attempt_profile_ids(incident_id)
         )
+        destination = None
+        if isinstance(incident, ReporterIncident):
+            latitude = incident.latitude
+            longitude = incident.longitude
+            if latitude is not None and longitude is not None:
+                destination = (latitude, longitude)
+
         eligible = await self.repository.eligible_marshals(
             property_id,
             datetime.now(timezone.utc) - timedelta(minutes=5),
             excluded_profile_ids,
+            destination,
         )
 
         if not eligible or attempt_count >= max_attempts:
@@ -624,6 +651,143 @@ class DispatchService:
             actor_subject=actor_subject,
         )
 
+    async def dispatch_next_reporter(
+        self,
+        *,
+        reporter_incident_id: int,
+        property_id: int,
+        expires_in_seconds: int,
+        actor_subject: str,
+        correlation_id: str,
+    ) -> Assignment | None:
+        """Offer a reporter incident to the nearest fresh, available marshal."""
+        incident = await self.session.scalar(select(ReporterIncident).where(
+            ReporterIncident.id == reporter_incident_id,
+            ReporterIncident.property_id == property_id,
+        ).with_for_update())
+        if incident is None:
+            raise ApplicationError("NOT_FOUND", "Incident not found for this property.", 404)
+        if incident.status not in {"OPEN", "ACKNOWLEDGED", "RECEIVED"}:
+            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Incident is not available for dispatch.", 409)
+        active = await self.session.scalar(select(Assignment).where(
+            Assignment.reporter_incident_id == reporter_incident_id,
+            Assignment.status.in_(ALL_ACTIVE_ASSIGNMENT_STATUSES),
+        ).order_by(Assignment.id).with_for_update())
+        if active is not None:
+            return active
+
+        attempts = await self.repository.assignment_attempt_count(reporter_incident_id=reporter_incident_id)
+        eligible = await self.repository.eligible_marshals(
+            property_id,
+            datetime.now(timezone.utc) - timedelta(minutes=5),
+            await self.repository.prior_attempt_profile_ids(reporter_incident_id=reporter_incident_id),
+            (incident.latitude, incident.longitude)
+            if incident.latitude is not None and incident.longitude is not None
+            else None,
+        )
+        if not eligible or attempts >= 20:
+            dedupe_key = f"reporter-incident:{reporter_incident_id}:no-eligible:{attempts}"
+            existing = await self.session.scalar(select(NotificationOutbox.id).where(
+                NotificationOutbox.dedupe_key == dedupe_key
+            ))
+            if existing is None:
+                self.session.add(NotificationOutbox(
+                    property_id=property_id,
+                    kind="DISPATCH_ESCALATION_REQUIRED",
+                    destination=f"property:{property_id}:dispatchers",
+                    payload={"reporter_incident_id": reporter_incident_id,
+                             "reason": "No fresh, eligible marshal is available"},
+                    dedupe_key=dedupe_key,
+                    status="PENDING",
+                ))
+            return None
+
+        marshal = eligible[0]
+        return await self.create_offer(
+            reporter_incident_id=reporter_incident_id,
+            property_id=property_id,
+            marshal_profile_id=marshal.id,
+            expires_in_seconds=expires_in_seconds,
+            idempotency_key=f"reporter-dispatch:{reporter_incident_id}:attempt:{attempts + 1}:marshal:{marshal.id}",
+            actor_subject=actor_subject,
+        )
+
+    async def create_team_offers(
+        self,
+        *,
+        incident_id: int | None,
+        reporter_incident_id: int | None,
+        property_id: int,
+        marshal_profile_ids: list[int],
+        expires_in_seconds: int,
+        idempotency_key: str,
+        actor_subject: str,
+    ) -> list[Assignment]:
+        """Invite several responders into one team without first-accept cancellation."""
+        if (incident_id is None) == (reporter_incident_id is None):
+            raise ApplicationError("INVALID_INCIDENT_SOURCE", "Exactly one incident source is required.", 422)
+        ids = sorted(set(marshal_profile_ids))
+        if not ids or len(ids) > 20:
+            raise ApplicationError("INVALID_MARSHAL", "Select between one and twenty responders.", 422)
+
+        if incident_id is not None:
+            source_filter = Assignment.security_event_id == incident_id
+            source = await self.session.scalar(select(SecurityEvent).where(
+                SecurityEvent.id == incident_id, SecurityEvent.property_id == property_id
+            ).with_for_update())
+            allowed_statuses = {"OPEN", "ACKNOWLEDGED", "DISPATCHING", "ESCALATED"}
+        else:
+            source_filter = Assignment.reporter_incident_id == reporter_incident_id
+            source = await self.session.scalar(select(ReporterIncident).where(
+                ReporterIncident.id == reporter_incident_id, ReporterIncident.property_id == property_id
+            ).with_for_update())
+            allowed_statuses = {"OPEN", "ACKNOWLEDGED", "RECEIVED"}
+        if source is None:
+            raise ApplicationError("NOT_FOUND", "Incident not found for this property.", 404)
+        if source.status not in allowed_statuses:
+            raise ApplicationError("INCIDENT_NOT_DISPATCHABLE", "Incident is not available for team dispatch.", 409)
+
+        existing_team_offer = await self.session.scalar(select(Assignment).where(
+            Assignment.idempotency_key == f"team:{idempotency_key}:{ids[0]}"
+        ))
+        active_rows = (await self.session.scalars(select(Assignment).where(
+            source_filter,
+            self._capacity_filter(datetime.now(timezone.utc)),
+        ).with_for_update())).all()
+        team_keys = {item.team_key for item in active_rows if item.team_key}
+        if len(team_keys) > 1:
+            raise ApplicationError("TEAM_CONFLICT", "The incident already has conflicting responder teams.", 409)
+        team_key = (existing_team_offer.team_key if existing_team_offer else None) or (
+            next(iter(team_keys), None) or uuid4().hex
+        )
+        for item in active_rows:
+            if item.team_key is None:
+                item.team_key = team_key
+            elif item.team_key != team_key:
+                raise ApplicationError("TEAM_CONFLICT", "The incident already belongs to another team.", 409)
+
+        offers = []
+        for profile_id in ids:
+            existing_member = next(
+                (item for item in active_rows if item.marshal_profile_id == profile_id),
+                None,
+            )
+            if existing_member is not None:
+                offers.append(existing_member)
+                continue
+            offers.append(await self.create_offer(
+                incident_id=incident_id,
+                reporter_incident_id=reporter_incident_id,
+                property_id=property_id,
+                marshal_profile_id=profile_id,
+                expires_in_seconds=expires_in_seconds,
+                idempotency_key=f"team:{idempotency_key}:{profile_id}",
+                actor_subject=actor_subject,
+                broadcast=True,
+                team_key=team_key,
+            ))
+        return offers
+
     async def cancel(
         self,
         *,
@@ -637,7 +801,7 @@ class DispatchService:
                 "Assignment offer not found.",
                 404,
             )
-        if offer.status not in {"OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"}:
+        if offer.status not in ALL_ACTIVE_ASSIGNMENT_STATUSES:
             raise ApplicationError(
                 "OFFER_CONFLICT",
                 "The assignment is already terminal.",
@@ -660,11 +824,13 @@ class DispatchService:
         status: str,
         expected_version: int,
         actor_subject: str,
+        review_summary: str | None = None,
     ) -> Assignment:
         transitions = {
             "EN_ROUTE": ("ACCEPTED",),
             "ON_SCENE": ("EN_ROUTE",),
-            "COMPLETED": ("ON_SCENE",),
+            "INVESTIGATING": ("ON_SCENE",),
+            "PENDING_REVIEW": ("INVESTIGATING",),
         }
         if status not in transitions:
             raise ApplicationError(
@@ -742,14 +908,48 @@ class DispatchService:
             now=now,
             actor_subject=actor_subject,
             correlation_id=f"progress:{offer.id}:{expected_version}",
+            reason=review_summary if status == "PENDING_REVIEW" else None,
         )
+        return result
 
-        if status == "COMPLETED":
-            await self.repository.resolve_incident(
-                offer.security_event_id,
-                reporter_incident_id=offer.reporter_incident_id,
-                actor_subject=actor_subject,
-                correlation_id=f"progress:{offer.id}:{result.version}",
-            )
+    async def supervisor_review(self, *, offer_id: int, expected_version: int, approved: bool,
+                                reason: str, actor_subject: str) -> Assignment:
+        """Approve final closure or return an investigation to the marshal."""
+        snapshot = await self.session.get(Assignment, offer_id)
+        if snapshot is None:
+            raise ApplicationError("NOT_FOUND", "Assignment not found.", 404)
+        source_model = SecurityEvent if snapshot.security_event_id is not None else ReporterIncident
+        source_id = snapshot.security_event_id if snapshot.security_event_id is not None else snapshot.reporter_incident_id
+        source = await self.session.scalar(select(source_model).where(source_model.id == source_id).with_for_update())
+        if source is None:
+            raise ApplicationError("NOT_FOUND", "Incident not found.", 404)
+        offer = await self.repository.lock_offer(offer_id)
+        if offer is None or offer.version != expected_version or offer.status != "PENDING_REVIEW":
+            raise ApplicationError("REVIEW_CONFLICT", "This response changed. Reload it before reviewing.", 409)
 
+        now = datetime.now(timezone.utc)
+        target_status = "COMPLETED" if approved else "INVESTIGATING"
+        correlation = f"supervisor-review:{offer.id}:{expected_version}"
+        result = await self.repository.transition(offer, status=target_status, now=now,
+            actor_subject=actor_subject, correlation_id=correlation, reason=reason)
+        self.session.add(AuditRecord(property_id=offer.property_id, actor_subject=actor_subject,
+            action="MARSHAL_INVESTIGATION_REVIEWED", resource_type="assignment", resource_id=str(offer.id),
+            correlation_id=correlation, details={"approved": approved, "reason": reason, "result": target_status}))
+
+        if approved:
+            if offer.team_key:
+                pending_offers = (await self.session.scalars(select(Assignment).where(
+                    Assignment.team_key == offer.team_key, Assignment.status == "OFFERED").with_for_update())).all()
+                for member in pending_offers:
+                    await self.repository.transition(member, status="CANCELLED", now=now,
+                        actor_subject=actor_subject, correlation_id=f"review-close:{offer.id}:{member.id}",
+                        reason="Supervisor approved response closure")
+                active_members = await self.session.scalar(select(func.count(Assignment.id)).where(
+                    Assignment.team_key == offer.team_key,
+                    Assignment.status.in_(ACTIVE_ASSIGNMENT_STATUSES))) or 0
+                if active_members:
+                    return result
+            await self.repository.resolve_incident(offer.security_event_id,
+                reporter_incident_id=offer.reporter_incident_id, actor_subject=actor_subject,
+                correlation_id=f"supervisor-review:{offer.id}:{result.version}")
         return result

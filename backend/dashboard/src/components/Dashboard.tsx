@@ -138,7 +138,8 @@ const Dashboard: React.FC<{ property: PropertyAccess }> = ({ property }) => {
           : <OperatorWorkspace key={`${property.id}:${selectedIncident ?? 'list'}`} propertyId={property.id} initialCameraId={selectedIncident} refreshVersion={revision} onChanged={() => setRevision(value => value + 1)} />)}
         {view === 'monitoring' && <>
         {loading && <div className="empty-state">Loading dashboard data...</div>}
-        {error && <div className="empty-state">Unable to load dashboard data: {error}</div>}
+        {error && <div className="empty-state" role="alert">Unable to load dashboard data: {error}
+          <button onClick={() => { setLoading(true); setRevision(value => value + 1); }}>Retry dashboard</button></div>}
         {!loading && !error && !primaryCamera && <div className="empty-state">No cameras are configured.</div>}
         {!loading && !error && primaryCamera && (
           <div className="monitor-layout">

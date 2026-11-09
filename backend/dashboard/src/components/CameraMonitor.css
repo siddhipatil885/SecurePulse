@@ -36,6 +36,8 @@
   border-color: var(--text-muted);
 }
 
+.select-camera { position: absolute; top: 46px; left: 16px; z-index: 20; }
+
 @media (min-width: 1024px) {
   .camera-monitor-container {
     flex-direction: row;

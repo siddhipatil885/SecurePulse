@@ -6,13 +6,13 @@ test.beforeEach(async ({ request }) => {
   expect(response.ok()).toBeTruthy();
   expect((await response.json()).mode).toBe('isolated-browser-test');
 });
-async function signIn(page, email = 'owner@example.test') {
+async function signIn(page, email = 'owner@example.test', expectConnected = true) {
   await page.goto('/');
   await page.getByLabel('Email', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByLabel('Select property')).toBeVisible();
-  await expect(page.getByText('Live updates connected', { exact: true })).toBeVisible();
+  if (expectConnected) await expect(page.getByText('Live updates connected', { exact: true })).toBeVisible();
 }
 
 test('registration validates passwords, collects property details and persists a refresh-safe session', async ({ page, context }) => {
@@ -172,4 +172,141 @@ test('mobile reports stream into the operator queue with evidence, actions and m
   await expect(page.getByText(/Assignment #\d+ · COMPLETED · Marshal #1/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel assignment', exact: true })).toHaveCount(0);
   expect((await (await page.request.get(`/api/v1/reporter/incidents/${report.id}`, { headers: bearer })).json()).status).toBe('RESOLVED');
+});
+
+test('account back/cancel controls and failed sign-in/sign-out preserve the expected session', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Email', { exact: true }).fill('owner@example.test');
+  await page.getByLabel('Password', { exact: true }).fill('incorrect-password');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByLabel('Select property')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Create an account', exact: true }).click();
+  await page.getByLabel('Full name').fill('Test account');
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByLabel('Confirm password').fill(password);
+  await page.getByRole('button', { name: 'Continue to property details' }).click();
+  await page.getByRole('button', { name: 'Back to account details' }).click();
+  await expect(page.getByLabel('Full name')).toHaveValue('Test account');
+  await page.getByRole('button', { name: 'Already have an account? Sign in' }).click();
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByLabel('Select property')).toBeVisible();
+  await page.getByRole('button', { name: 'Add property', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'North residence', exact: true })).toBeVisible();
+  await page.route('**/dashboard/auth/logout', route => route.fulfill({ status: 503, json: { error: { message: 'Temporary sign-out failure' } } }));
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Temporary sign-out failure');
+  await expect(page.getByLabel('Select property')).toBeVisible();
+  await page.unroute('**/dashboard/auth/logout');
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+});
+
+test('incident filters, detail retry and failed actions recover without losing the reason', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /^Incidents \(/ }).click();
+  await page.getByLabel('Source', { exact: true }).selectOption('reporter');
+  await expect(page.getByText('No incidents match these filters.')).toBeVisible();
+  await page.getByLabel('Source', { exact: true }).selectOption('camera');
+  await page.getByLabel('Severity', { exact: true }).selectOption('LOW');
+  await expect(page.getByText('No incidents match these filters.')).toBeVisible();
+  await page.getByLabel('Severity', { exact: true }).selectOption('HIGH');
+  await page.route('**/cases/camera/1', route => route.fulfill({ status: 503, json: { error: { message: 'Temporary detail failure' } } }));
+  await page.getByRole('button', { name: /#1 · NORTH INTRUSION/ }).click();
+  await expect(page.getByRole('alert')).toHaveText('Temporary detail failure');
+  await page.unroute('**/cases/camera/1');
+  await page.getByRole('button', { name: 'Retry details' }).click();
+  await expect(page.getByLabel('Action', { exact: true })).toBeVisible();
+  await page.route('**/cases/camera/1/commands', route => route.fulfill({ status: 409, json: { error: { message: 'Incident changed; review and try again.' } } }));
+  await page.getByLabel('Reason', { exact: true }).fill('Keep this reason after failure');
+  await page.getByRole('button', { name: 'Confirm action' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Incident changed; review and try again.');
+  await expect(page.getByLabel('Reason', { exact: true })).toHaveValue('Keep this reason after failure');
+  await page.unroute('**/cases/camera/1/commands');
+  await page.getByRole('button', { name: 'Confirm action' }).click();
+  await expect(page.getByText('Incident updated to ACKNOWLEDGED.')).toBeVisible();
+  await page.getByLabel('Status', { exact: true }).selectOption('ACKNOWLEDGED');
+  await expect(page.getByRole('button', { name: /#1 · NORTH INTRUSION/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh incidents' }).click();
+  await expect(page.getByText('1 matching incidents')).toBeVisible();
+});
+
+test('incident pagination and list retry request the correct page', async ({ page }) => {
+  await signIn(page);
+  let fail = true;
+  await page.route('**/properties/1/cases?**', async route => {
+    if (fail) return route.fulfill({ status: 503, json: { error: { message: 'Temporary list failure' } } });
+    const response = await route.fetch();
+    const data = await response.json();
+    const currentPage = Number(new URL(route.request().url()).searchParams.get('page'));
+    await route.fulfill({ json: { ...data, page: currentPage, total: 21,
+      items: currentPage === 1 ? data.items : [{ ...data.items[0], key: 'camera:21', source_id: 21, incident_type: 'SECOND_PAGE' }] } });
+  });
+  await page.getByRole('button', { name: /^Incidents \(/ }).click();
+  await expect(page.getByRole('alert')).toHaveText('Temporary list failure');
+  fail = false;
+  await page.getByRole('button', { name: 'Refresh incidents' }).click();
+  const pagination = page.getByRole('navigation', { name: 'Incidents pagination' });
+  await expect(pagination.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await pagination.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('button', { name: /#21 · SECOND PAGE/ })).toBeVisible();
+  await expect(pagination.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await pagination.getByRole('button', { name: 'Previous' }).click();
+  await expect(page.getByRole('button', { name: /#1 · NORTH INTRUSION/ })).toBeVisible();
+});
+
+test('camera selection works by keyboard and failed video can be retried', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).rtcAttempts = 0;
+    (window as any).rtcClosed = 0;
+    (window as any).RTCPeerConnection = class {
+      addTransceiver() {}
+      async createOffer() { (window as any).rtcAttempts++; throw new Error('Controlled unavailable camera'); }
+      close() { (window as any).rtcClosed++; }
+    };
+  });
+  await page.route('**/properties/1/cameras', route => route.fulfill({ json: [
+    { id: 1, name: 'Camera 1', frigate_camera_name: 'fixture-primary', enabled: true, created_at: null, updated_at: null },
+    { id: 4, name: 'Side camera', frigate_camera_name: 'fixture-side', enabled: false, created_at: null, updated_at: null },
+  ] }));
+  await signIn(page);
+  const retry = page.getByRole('button', { name: 'Retry live video from Camera 1' });
+  await expect(page.locator('[data-camera-id="1"]')).toHaveAttribute('data-stream-state', 'unavailable');
+  const before = await page.evaluate(() => (window as any).rtcAttempts);
+  await retry.click();
+  await expect.poll(() => page.evaluate(() => (window as any).rtcAttempts)).toBeGreaterThan(before);
+  await expect.poll(() => page.evaluate(() => (window as any).rtcClosed)).toBeGreaterThan(0);
+  const select = page.getByRole('button', { name: 'Select Side camera as primary camera' });
+  await select.focus(); await page.keyboard.press('Enter');
+  await expect(page.locator('.primary-camera-wrapper [data-camera-id="4"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Select Camera 1 as primary camera' }).click();
+  await expect(page.locator('.primary-camera-wrapper [data-camera-id="1"]')).toBeVisible();
+  await page.getByRole('button', { name: /^Incidents \(/ }).click();
+  await expect(page.getByRole('heading', { name: 'Incident history' })).toBeVisible();
+  await page.getByRole('button', { name: 'Live monitoring', exact: true }).click();
+  await expect(page.locator('.primary-camera-wrapper [data-camera-id="1"]')).toBeVisible();
+});
+
+test('dashboard retry and monitoring incident links support dismiss/reopen actions', async ({ page }) => {
+  let fail = true;
+  await page.route('**/properties/1/cameras', route => fail
+    ? route.fulfill({ status: 503, json: { error: { message: 'Temporary camera-list failure' } } })
+    : route.continue());
+  await signIn(page, 'owner@example.test', false);
+  await expect(page.getByRole('alert')).toContainText('Temporary camera-list failure');
+  fail = false;
+  await page.getByRole('button', { name: 'Retry dashboard' }).click();
+  await expect(page.locator('.primary-camera-wrapper')).toBeVisible();
+  await page.getByRole('button', { name: 'View incident #1', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: 'Camera incident #1', exact: true })).toBeVisible();
+  await page.getByLabel('Action', { exact: true }).selectOption('dismiss');
+  await page.getByLabel('Reason', { exact: true }).fill('Reviewed and confirmed false alarm');
+  await page.getByRole('button', { name: 'Confirm action' }).click();
+  await expect(page.getByText('OPEN → DISMISSED')).toBeVisible();
+  await page.getByLabel('Action', { exact: true }).selectOption('reopen');
+  await page.getByLabel('Reason', { exact: true }).fill('New evidence requires another review');
+  await page.getByRole('button', { name: 'Confirm action' }).click();
+  await expect(page.getByText('DISMISSED → OPEN')).toBeVisible();
 });

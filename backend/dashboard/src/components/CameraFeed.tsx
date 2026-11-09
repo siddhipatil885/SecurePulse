@@ -17,6 +17,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, 
   const [time, setTime] = useState<Date>(new Date());
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'unavailable'>('connecting');
+  const [attempt, setAttempt] = useState(0);
   const setVideoRef = useCallback((element: HTMLVideoElement | null) => {
     setVideoElement(element);
   }, []);
@@ -36,6 +37,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, 
     let disposed = false;
     let peer: RTCPeerConnection | null = null;
     const streamVideo = videoElement;
+    const abort = new AbortController();
 
     const startStream = async () => {
       if (camera.status !== 'enabled' || !streamVideo) return;
@@ -78,6 +80,7 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, 
         const response = await fetch(frigateWebRtcUrl(propertyId, camera.id), {
           method: 'POST',
           credentials: 'include',
+          signal: abort.signal,
           headers: { 'Content-Type': 'application/sdp', 'X-Dashboard-Request': '1' },
           body: connection.localDescription?.sdp,
         });
@@ -92,10 +95,11 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, 
     void startStream();
     return () => {
       disposed = true;
+      abort.abort();
       if (streamVideo) streamVideo.srcObject = null;
       peer?.close();
     };
-  }, [propertyId, camera.id, camera.status, videoElement]);
+  }, [propertyId, camera.id, camera.status, videoElement, attempt]);
 
   return (
     <div data-camera-id={camera.id} data-stream-state={streamState} className={`camera-feed-container ${isPrimary ? 'primary' : 'secondary'} ${camera.status === 'disabled' ? 'offline' : ''}`}>
@@ -146,6 +150,8 @@ const CameraFeed: React.FC<CameraFeedProps> = ({ propertyId, camera, isPrimary, 
         </div>
         <div className="people-count">Current people: {liveTracks.length}</div>
       </div>
+      {camera.status === 'enabled' && streamState !== 'live' && <button className="retry-camera"
+        aria-label={`Retry live video from ${camera.name}`} onClick={() => setAttempt(value => value + 1)}>Retry live video</button>}
 
     </div>
   );

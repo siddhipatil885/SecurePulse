@@ -100,6 +100,8 @@ class CaseEvidence(BaseModel):
     original_filename: str | None
     byte_size: int | None
     occurred_at: datetime
+    source: Literal["incident", "marshal"] = "incident"
+    assignment_id: int | None = None
 
 
 class CaseEvidencePage(BaseModel):

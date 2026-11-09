@@ -508,7 +508,7 @@ async def list_reporter_incidents(
     if has_active_assignment is not None:
         assigned = select(Assignment.id).where(Assignment.reporter_incident_id == ReporterIncident.id,
             Assignment.property_id == ReporterIncident.property_id,
-            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE"])).exists()
+            Assignment.status.in_(["OFFERED", "ACCEPTED", "EN_ROUTE", "ON_SCENE", "INVESTIGATING", "PENDING_REVIEW"])).exists()
         filters.append(assigned if has_active_assignment else ~assigned)
     total = await session.scalar(select(func.count()).select_from(ReporterIncident).where(*filters))
     relation_options = (selectinload(ReporterIncident.evidence), selectinload(ReporterIncident.timeline)) if include_details else (raiseload("*"),)
